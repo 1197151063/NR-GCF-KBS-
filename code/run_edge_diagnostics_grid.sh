@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run an NR-GCF diagnostics grid over additive-noise train splits.
+# Run an NR-GCF diagnostics grid over synthetic-noise train splits.
 #
 # Required layout for non-zero noise ratios:
 #   $NOISE_DATA_ROOT/$DATASET/noise_<ratio>/seed_<seed>/train.txt
@@ -15,6 +15,15 @@ set -euo pipefail
 #   OUTPUT_ROOT=/path/to/results \
 #   bash run_edge_diagnostics_grid.sh
 #
+# Degree-preserving replacement protocol (recommended structural pilot):
+#   DATASET=yelp2018 \
+#   NOISE_MODE=degree_preserving_replace \
+#   NOISE_RATIOS="0.10" \
+#   SEEDS="2026" \
+#   GPU_ID=0 \
+#   OUTPUT_ROOT=/path/to/results \
+#   bash run_edge_diagnostics_grid.sh
+#
 # Built-in training-only random-nonedge protocol (explicit opt-in):
 #   DATASET=yelp2018 \
 #   NOISE_MODE=uniform_train_nonedge \
@@ -24,10 +33,10 @@ set -euo pipefail
 #   OUTPUT_ROOT=/path/to/results \
 #   bash run_edge_diagnostics_grid.sh
 #
-# Ratio 0 uses the repository's clean train.txt unless a prepared ratio-0
-# split exists. --requested-noise-ratio remains metadata-only in NR-GCF; this
-# launcher verifies and installs the corresponding train split in an isolated
-# temporary Git worktree before invoking the existing entry point.
+# In additive modes, ratio 0 uses the repository's clean train.txt unless a
+# prepared ratio-0 split exists. --requested-noise-ratio remains metadata-only
+# in NR-GCF; this launcher verifies and installs the corresponding train split
+# in an isolated temporary Git worktree before invoking the existing entry.
 
 usage() {
   cat <<'EOF'
@@ -35,8 +44,8 @@ Run edge diagnostics for a grid of noise ratios and random seeds.
 
 Environment variables:
   DATASET          Dataset name (default: yelp2018)
-  NOISE_RATIOS     Space-separated ratios (default: "0 0.05 0.10 0.20")
-  SEEDS            Space-separated seeds (default: "2026 2027 2028")
+  NOISE_RATIOS     Space-separated ratios (default: "0.10")
+  SEEDS            Space-separated seeds (default: "2026")
   GPU_ID           CUDA device visible to each run (required unless DRY_RUN=1)
   NOISE_DATA_ROOT  Root of prepared noisy splits (required in prepared mode)
   OUTPUT_ROOT      New root directory for run outputs (required)
@@ -44,7 +53,9 @@ Environment variables:
 Optional variables:
   NOISE_MODE             prepared: consume externally prepared train.txt files;
                          uniform_train_nonedge: generate unique random training
-                         non-edges without reading validation/test data
+                         non-edges without reading validation/test data;
+                         degree_preserving_replace: swap item endpoints between
+                         pairs of edges, preserving every user/item degree
                          (default: prepared)
   STOP_AFTER_FILTER       1: stop after diagnostics export; 0: continue training
                           (default: 1)
@@ -57,12 +68,12 @@ Optional variables:
   REQUIRE_CLEAN_REPO      Refuse a tracked dirty source tree (default: 1)
   DRY_RUN                 1: validate paths and print the grid only (default: 0)
 
-Prepared split layout:
+Prepared additive split layout:
   NOISE_DATA_ROOT/DATASET/noise_RATIO/seed_SEED/train.txt
 
-Every noisy train.txt must contain all clean training edges plus the requested
-number of unique injected edges. The launcher rejects duplicate edges,
-missing clean edges, and a mismatched actual noise ratio.
+In prepared mode, every noisy train.txt must contain all clean training edges
+plus the requested number of unique injected edges. Replacement mode generates
+and validates its own fixed-size split and does not use NOISE_DATA_ROOT.
 EOF
 }
 
@@ -77,8 +88,8 @@ if [[ $# -ne 0 ]]; then
 fi
 
 dataset="${DATASET:-yelp2018}"
-noise_ratios="${NOISE_RATIOS:-0 0.05 0.10 0.20}"
-seeds="${SEEDS:-2026 2027 2028}"
+noise_ratios="${NOISE_RATIOS:-0.10}"
+seeds="${SEEDS:-2026}"
 gpu_id="${GPU_ID:-}"
 noise_data_root="${NOISE_DATA_ROOT:-}"
 noise_mode="${NOISE_MODE:-prepared}"
@@ -116,8 +127,10 @@ if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]
   echo "STRUCTURAL_MODE must be two_hop_minhash or none." >&2
   exit 2
 fi
-if [[ "$noise_mode" != "prepared" && "$noise_mode" != "uniform_train_nonedge" ]]; then
-  echo "NOISE_MODE must be prepared or uniform_train_nonedge." >&2
+if [[ "$noise_mode" != "prepared" && \
+      "$noise_mode" != "uniform_train_nonedge" && \
+      "$noise_mode" != "degree_preserving_replace" ]]; then
+  echo "NOISE_MODE must be prepared, uniform_train_nonedge, or degree_preserving_replace." >&2
   exit 2
 fi
 
@@ -436,11 +449,18 @@ for ratio in $noise_ratios; do
       echo "Invalid integer seed: $seed" >&2
       exit 2
     fi
-    run_name="noise_${tag}_seed_${seed}"
+    if [[ "$noise_mode" == "degree_preserving_replace" ]]; then
+      run_name="replace_noise_${tag}_seed_${seed}"
+    else
+      run_name="noise_${tag}_seed_${seed}"
+    fi
     run_dir="${output_root%/}/$dataset/$run_name"
     noise_type="prepared_additive_nonedge"
     if [[ "$noise_mode" == "prepared" ]]; then
       variant_train="$(resolve_train_path "$ratio" "$seed")"
+    elif [[ "$noise_mode" == "degree_preserving_replace" ]]; then
+      variant_train="$run_dir/generated_train.txt"
+      noise_type="degree_preserving_edge_swap"
     elif ratio_is_zero "$ratio"; then
       variant_train="$clean_train"
       noise_type="uniform_train_nonedge"
@@ -458,17 +478,34 @@ for ratio in $noise_ratios; do
     fi
     mkdir -p "$run_dir"
 
-    if [[ "$noise_mode" == "uniform_train_nonedge" ]] && ! ratio_is_zero "$ratio"; then
+    labels_already_written="0"
+    if [[ "$noise_mode" == "degree_preserving_replace" ]]; then
+      python3 "$script_dir/generate_degree_preserving_replace.py" \
+        --clean-train "$clean_train" \
+        --noise-ratio "$ratio" \
+        --seed "$seed" \
+        --output-train "$variant_train" \
+        --labels "$run_dir/synthetic_edge_labels.csv" \
+        --generation-metadata "$run_dir/noise_generation.json" \
+        --validation "$run_dir/noise_validation.json" \
+        | tee "$run_dir/noise_generation.log"
+      labels_already_written="1"
+    elif [[ "$noise_mode" == "uniform_train_nonedge" ]] && ! ratio_is_zero "$ratio"; then
       generate_uniform_train_nonedges \
         "$ratio" "$seed" "$variant_train" "$run_dir/noise_generation.json" \
         | tee "$run_dir/noise_generation.log"
     fi
 
-    validate_split_and_write_labels \
-      "$variant_train" "$ratio" \
-      "$run_dir/synthetic_edge_labels.csv" \
-      "$run_dir/noise_validation.json" "$noise_type" \
-      | tee "$run_dir/noise_validation.log"
+    if [[ "$labels_already_written" == "0" ]]; then
+      validate_split_and_write_labels \
+        "$variant_train" "$ratio" \
+        "$run_dir/synthetic_edge_labels.csv" \
+        "$run_dir/noise_validation.json" "$noise_type" \
+        | tee "$run_dir/noise_validation.log"
+    else
+      python3 -m json.tool "$run_dir/noise_validation.json" \
+        | tee "$run_dir/noise_validation.log"
+    fi
 
     temporary_parent="$(mktemp -d "${TMPDIR:-/tmp}/nrgcf-grid.XXXXXX")"
     active_worktree="$temporary_parent/worktree"
