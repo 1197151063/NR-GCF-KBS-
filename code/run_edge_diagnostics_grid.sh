@@ -71,6 +71,8 @@ Optional variables:
   HARD_CANDIDATE_POOL     candidates ranked per hard swap (default: 8)
   HARD_SUPPORT_LIMIT      bounded same-type neighbors per side (default: 16)
   RUN_PILOT_ANALYSIS      write pilot_analysis.json after export (default: 1)
+  TRAIN_EPOCHS            optional total epoch override, e.g. 17 for two
+                          post-filter smoke epochs (default: entry default)
 
 Prepared additive split layout:
   NOISE_DATA_ROOT/DATASET/noise_RATIO/seed_SEED/train.txt
@@ -111,6 +113,7 @@ replacement_selection="${REPLACEMENT_SELECTION:-uniform}"
 hard_candidate_pool="${HARD_CANDIDATE_POOL:-8}"
 hard_support_limit="${HARD_SUPPORT_LIMIT:-16}"
 run_pilot_analysis="${RUN_PILOT_ANALYSIS:-1}"
+train_epochs="${TRAIN_EPOCHS:-}"
 
 for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis; do
   value="${!binary_flag}"
@@ -135,6 +138,11 @@ fi
 if [[ "$replacement_selection" != "uniform" && \
       "$replacement_selection" != "hard_two_hop" ]]; then
   echo "REPLACEMENT_SELECTION must be uniform or hard_two_hop." >&2
+  exit 2
+fi
+if [[ -n "$train_epochs" ]] && \
+   { ! [[ "$train_epochs" =~ ^[0-9]+$ ]] || [[ "$train_epochs" -lt 15 ]]; }; then
+  echo "TRAIN_EPOCHS must be an integer >= 15 when provided." >&2
   exit 2
 fi
 if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]; then
@@ -554,6 +562,9 @@ for ratio in $noise_ratios; do
     if [[ "$stop_after_filter" == "1" ]]; then
       command+=(--edge-diagnostics-stop-after-filter)
     fi
+    if [[ -n "$train_epochs" ]]; then
+      command+=(--epochs "$train_epochs")
+    fi
 
     {
       echo "base_commit=$commit_hash"
@@ -567,6 +578,7 @@ for ratio in $noise_ratios; do
       echo "replacement_selection=$replacement_selection"
       echo "hard_candidate_pool=$hard_candidate_pool"
       echo "hard_support_limit=$hard_support_limit"
+      echo "train_epochs=${train_epochs:-entry_default}"
       printf 'command='
       printf '%q ' "${command[@]}"
       printf '\n'

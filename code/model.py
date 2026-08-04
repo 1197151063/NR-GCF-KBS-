@@ -223,6 +223,34 @@ class NRGCF(RecModel):
         self.edge_index = gcn_norm(self.edge_index)
         self.lambda_ = config['lambda']
         self.momentum_loss = torch.zeros(edge_index.size(1)).to(device)
+        self.active_edge_count = int(edge_index.size(1))
+
+    @torch.no_grad()
+    def set_training_graph(self, edge_index, edge_weight=None):
+        """Rebuild and normalize the graph used by stage-two propagation."""
+        if edge_index.dim() != 2 or edge_index.size(0) != 2:
+            raise ValueError("edge_index must have shape [2, num_edges]")
+        if edge_index.size(1) == 0:
+            raise ValueError("NR-GCF stage-two graph cannot be empty")
+        edge_index = edge_index.to(self.user_embedding.weight.device)
+        if edge_weight is not None:
+            edge_weight = edge_weight.detach().to(
+                device=edge_index.device,
+                dtype=self.user_embedding.weight.dtype,
+            )
+            if edge_weight.dim() != 1 or edge_weight.numel() != edge_index.size(1):
+                raise ValueError("edge_weight must contain one value per edge")
+            if not bool(torch.isfinite(edge_weight).all()):
+                raise ValueError("edge_weight contains NaN or Inf")
+            if bool((edge_weight < 0).any()):
+                raise ValueError("edge_weight must be non-negative")
+            graph = self.get_sparse_graph(
+                edge_index, use_value=True, value=edge_weight
+            )
+        else:
+            graph = self.get_sparse_graph(edge_index, use_value=False)
+        self.edge_index = gcn_norm(graph)
+        self.active_edge_count = int(edge_index.size(1))
 
     
     def cross_norm(self,x):
@@ -266,7 +294,7 @@ class NRGCF(RecModel):
     
     @torch.no_grad()
     def update_momentum(self, index, instance_loss:torch.Tensor, epoch:int):
-        """
+        r"""
         \mathcal{L}^h_{i,0} = \mathcal{L}_{i,0}
         \mathcal{L}^h_{i,t} = (t/T) * \mathcal{L}^h_{i,t-1} + (1 - t/T) * \mathcal{L}_{i,t}
         """

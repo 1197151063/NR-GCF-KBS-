@@ -1356,9 +1356,15 @@ class EdgeDiagnosticsExporter(object):
                 "Current momentum coefficient is epoch/10 and exceeds one at epochs 11-14.",
                 "Current code uses fixed beta=0.8 rather than the paper's mean-adaptive threshold.",
                 "Current mask also removes the minimum normalized score because retention requires score > 0.",
-                "Filtered edges are not assigned back to dataset.train_edge_index or model.edge_index and are not renormalized.",
+                "After diagnostics export, retained edges are assigned to the stage-two positive sampler and model graph, and the reconstructed graph is re-normalized.",
                 "Representation modulation is active from the first epoch rather than switched on only after filtering.",
             ],
+            "stage_two_graph_policy": {
+                "positive_sampling": "Retained edges only after the filtering point.",
+                "propagation": "Retained graph rebuilt as a symmetric sparse graph and normalized again with gcn_norm.",
+                "evaluation_mask": "Complete observed pre-filter training split, so filtering does not change the evaluation candidate set.",
+                "representation_modulation": "Existing cross_norm remains active; after filtering it consumes representations propagated on the reconstructed graph.",
+            },
             "graph_used_for_each_feature": {
                 "loss_history": "Already-computed instance losses on the current model's original normalized training graph.",
                 "historical_or_momentum_loss": "Exact raw model.momentum_loss immediately before current min-max normalization.",

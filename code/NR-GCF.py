@@ -103,6 +103,7 @@ log_path = init_logger(model_name='NR-GCF-new', dataset_name=world.config['datas
 
 
 train_edge_index = dataset.train_edge_index.to(device)
+evaluation_train_edge_index = train_edge_index
 original_train_edge_index = (
     train_edge_index if world.args.export_edge_diagnostics else None
 )
@@ -145,7 +146,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             normalized_score_for_diagnostics = momentum_loss.detach().clone()
         momentum_loss[momentum_loss > config['beta']] = 0
         retained_edge_mask = momentum_loss > 0
-        train_edge_index = train_edge_index[:, retained_edge_mask]
+        filtered_train_edge_index = train_edge_index[:, retained_edge_mask]
         if edge_loss_history is not None:
             from edge_diagnostics import (
                 DiagnosticsInvarianceGuard,
@@ -158,7 +159,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 'normalized_edge_score': normalized_score_for_diagnostics,
                 'post_threshold_score': momentum_loss,
                 'retained_edge_mask': retained_edge_mask,
-                'filtered_train_edge_index': train_edge_index,
+                'filtered_train_edge_index': filtered_train_edge_index,
             }
             invariance_guard = None
             if world.args.edge_diagnostics_verify_invariance:
@@ -194,18 +195,41 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                         + str(invariance_result)
                     )
             edge_loss_history = None
-            original_train_edge_index = None
             del tracked_tensors
             del exporter
             del invariance_guard
             del raw_momentum_for_diagnostics
             del normalized_score_for_diagnostics
+        # Stage two must use the retained graph consistently for both positive
+        # sampling and LightGCN propagation. Rebuilding model.edge_index here
+        # also re-applies graph normalization after edge removal.
+        model.set_training_graph(filtered_train_edge_index)
+        dataset.train_edge_index = filtered_train_edge_index.detach().cpu()
+        dataset.sampling_weights = dataset.get_edge_weights(
+            dataset.train_edge_index
+        )
+        train_edge_index = filtered_train_edge_index
+        print_log(
+            'Stage-two graph applied: '
+            f'{train_edge_index.size(1)} retained edges; '
+            'BPR sampling and propagation now share the reconstructed graph; '
+            f'evaluation mask remains {evaluation_train_edge_index.size(1)} '
+            'pre-filter observed edges.'
+        )
+        original_train_edge_index = None
         del retained_edge_mask
+        del filtered_train_edge_index
         if world.args.edge_diagnostics_stop_after_filter:
             print_log('Stopped after epoch-15 filtering point by explicit diagnostics smoke-test option.')
             break
     end_time = time.time()
-    recall,ndcg = test([20],model,train_edge_index,test_edge_index,num_users)
+    # Evaluation always masks the complete observed input train split. This
+    # keeps the candidate set identical before/after filtering and across
+    # filtering methods.
+    recall,ndcg = test(
+        [20], model, evaluation_train_edge_index,
+        test_edge_index, num_users
+    )
     flag,best,patience = utils.early_stopping(recall[20],ndcg[20],best,patience,model)
     if patience == 0:
         best_epoch = epoch

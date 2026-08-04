@@ -16,6 +16,36 @@ bitwise reproducibility can still depend on sparse CUDA kernels and the
 server's PyTorch/PyG configuration. Set `PYTHONHASHSEED` in the shell as well
 for a fully documented launch environment.
 
+## Stage-two graph plumbing
+
+After the filtering decision, the current entry now applies the retained edge
+set consistently to both stage-two positive sampling and LightGCN propagation.
+The symmetric sparse graph is rebuilt and normalized again with `gcn_norm`.
+The existing cross-norm representation modulation is unchanged, but its next
+forward pass therefore consumes representations propagated on the reconstructed
+graph. Evaluation continues to mask the complete observed pre-filter training
+split, so filtering cannot change the recommendation candidate set.
+
+The diagnostics exporter still runs immediately after the decision and before
+the stage-two graph replacement. Its invariance guard therefore verifies that
+diagnostics itself did not modify the original model, scores, mask, parameters,
+or RNG state. The graph replacement happens only after that verification and
+is reported by a `Stage-two graph applied:` line in the training log.
+
+Use the focused two-epoch stage-two smoke launcher after pulling the commit:
+
+```bash
+cd /root/cyj/NR-GCF-KBS-/code
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/stage2_plumbing_smoke \
+bash run_stage_two_plumbing_smoke.sh
+```
+
+It uses 10% uniform degree-preserving replacement, filters after epoch 15, and
+continues through epoch 17. The epoch-16 and epoch-17 losses therefore exercise
+the reconstructed positive pool and re-normalized propagation graph. Override
+`NOISE_RATIOS`, `SEEDS`, or `TRAIN_EPOCHS` only when a broader check is needed.
+
 The packaged launcher sets `OMP_NUM_THREADS` to 4 by default to avoid malformed
 inherited values. Override it with `NRGCF_OMP_NUM_THREADS` when appropriate.
 
