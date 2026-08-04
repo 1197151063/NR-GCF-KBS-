@@ -36,4 +36,28 @@ def parse_args():
     parser.add_argument('--lambda_', type=float, default=1,
                         help="the lambda for cross norm in loss function")  # 0.5
 
+    parser.add_argument('--export-edge-diagnostics', action='store_true',
+                        help='export side-channel per-edge diagnostics at the current filtering point')
+    parser.add_argument('--edge-diagnostics-dir', type=str, default='edge_diagnostics',
+                        help='diagnostics output directory (default: ./edge_diagnostics)')
+    parser.add_argument('--edge-diagnostics-format', type=str, default='parquet',
+                        choices=['parquet', 'csv'],
+                        help='preferred diagnostics part format; parquet falls back to CSV without pyarrow')
+    parser.add_argument('--edge-diagnostics-structural-mode', type=str,
+                        default='two_hop_countsketch',
+                        choices=['two_hop_countsketch', 'none'],
+                        help='training-graph-only structural feature mode')
+    parser.add_argument('--edge-diagnostics-topk', type=int, default=10,
+                        help='top-k for bounded structural neighbor summaries')
+    parser.add_argument('--edge-diagnostics-chunk-size', type=int, default=65536,
+                        help='number of edge rows computed and written per diagnostics part')
+    parser.add_argument('--edge-diagnostics-verify-invariance', action='store_true',
+                        help='verify exporter leaves tracked tensors, parameters, and RNG state unchanged')
+    parser.add_argument('--edge-diagnostics-min-degree', type=int, default=2,
+                        help='transparent post-removal minimum-degree risk threshold')
+    parser.add_argument('--edge-diagnostics-stop-after-filter', action='store_true',
+                        help='explicit smoke-test option: stop after the epoch-15 filtering/export point')
+    parser.add_argument('--requested-noise-ratio', type=float, default=None,
+                        help='metadata only; does not inject noise or assert an actual noise ratio')
+
     return parser.parse_args()
