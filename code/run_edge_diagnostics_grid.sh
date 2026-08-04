@@ -59,7 +59,7 @@ Optional variables:
                          (default: prepared)
   STOP_AFTER_FILTER       1: stop after diagnostics export; 0: continue training
                           (default: 1)
-  DIAGNOSTICS_FORMAT      parquet or csv (default: parquet)
+  DIAGNOSTICS_FORMAT      parquet, csv, or csv_gzip (default: parquet)
   STRUCTURAL_MODE         two_hop_minhash or none (default: two_hop_minhash)
   TOPK                    Structural top-k (default: 10)
   CHUNK_SIZE              Export chunk size (default: 8192)
@@ -67,6 +67,10 @@ Optional variables:
   NRGCF_OMP_NUM_THREADS   OpenMP threads (default: 4)
   REQUIRE_CLEAN_REPO      Refuse a tracked dirty source tree (default: 1)
   DRY_RUN                 1: validate paths and print the grid only (default: 0)
+  REPLACEMENT_SELECTION   uniform or hard_two_hop (default: uniform)
+  HARD_CANDIDATE_POOL     candidates ranked per hard swap (default: 8)
+  HARD_SUPPORT_LIMIT      bounded same-type neighbors per side (default: 16)
+  RUN_PILOT_ANALYSIS      write pilot_analysis.json after export (default: 1)
 
 Prepared additive split layout:
   NOISE_DATA_ROOT/DATASET/noise_RATIO/seed_SEED/train.txt
@@ -103,8 +107,12 @@ min_degree="${MIN_DEGREE:-2}"
 omp_threads="${NRGCF_OMP_NUM_THREADS:-4}"
 require_clean_repo="${REQUIRE_CLEAN_REPO:-1}"
 dry_run="${DRY_RUN:-0}"
+replacement_selection="${REPLACEMENT_SELECTION:-uniform}"
+hard_candidate_pool="${HARD_CANDIDATE_POOL:-8}"
+hard_support_limit="${HARD_SUPPORT_LIMIT:-16}"
+run_pilot_analysis="${RUN_PILOT_ANALYSIS:-1}"
 
-for binary_flag in stop_after_filter require_clean_repo dry_run; do
+for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis; do
   value="${!binary_flag}"
   if [[ "$value" != "0" && "$value" != "1" ]]; then
     echo "${binary_flag^^} must be 0 or 1 (got: $value)" >&2
@@ -119,8 +127,14 @@ if [[ "$dry_run" != "1" && -z "$gpu_id" ]]; then
   echo "GPU_ID is required unless DRY_RUN=1." >&2
   exit 2
 fi
-if [[ "$diagnostics_format" != "parquet" && "$diagnostics_format" != "csv" ]]; then
-  echo "DIAGNOSTICS_FORMAT must be parquet or csv." >&2
+if [[ "$diagnostics_format" != "parquet" && "$diagnostics_format" != "csv" && \
+      "$diagnostics_format" != "csv_gzip" ]]; then
+  echo "DIAGNOSTICS_FORMAT must be parquet, csv, or csv_gzip." >&2
+  exit 2
+fi
+if [[ "$replacement_selection" != "uniform" && \
+      "$replacement_selection" != "hard_two_hop" ]]; then
+  echo "REPLACEMENT_SELECTION must be uniform or hard_two_hop." >&2
   exit 2
 fi
 if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]; then
@@ -439,6 +453,7 @@ echo "  noise mode: $noise_mode"
 echo "  ratios:     $noise_ratios"
 echo "  seeds:      $seeds"
 echo "  output:     $output_root"
+echo "  replacement selection: $replacement_selection"
 echo "  dry run:    $dry_run"
 
 for ratio in $noise_ratios; do
@@ -450,7 +465,11 @@ for ratio in $noise_ratios; do
       exit 2
     fi
     if [[ "$noise_mode" == "degree_preserving_replace" ]]; then
-      run_name="replace_noise_${tag}_seed_${seed}"
+      if [[ "$replacement_selection" == "hard_two_hop" ]]; then
+        run_name="hard_replace_noise_${tag}_seed_${seed}"
+      else
+        run_name="replace_noise_${tag}_seed_${seed}"
+      fi
     else
       run_name="noise_${tag}_seed_${seed}"
     fi
@@ -488,6 +507,9 @@ for ratio in $noise_ratios; do
         --labels "$run_dir/synthetic_edge_labels.csv" \
         --generation-metadata "$run_dir/noise_generation.json" \
         --validation "$run_dir/noise_validation.json" \
+        --selection "$replacement_selection" \
+        --candidate-pool-size "$hard_candidate_pool" \
+        --structural-support-limit "$hard_support_limit" \
         | tee "$run_dir/noise_generation.log"
       labels_already_written="1"
     elif [[ "$noise_mode" == "uniform_train_nonedge" ]] && ! ratio_is_zero "$ratio"; then
@@ -526,6 +548,8 @@ for ratio in $noise_ratios; do
       --edge-diagnostics-chunk-size "$chunk_size"
       --edge-diagnostics-min-degree "$min_degree"
       --edge-diagnostics-verify-invariance
+      --edge-diagnostics-labels-file "$run_dir/synthetic_edge_labels.csv"
+      --edge-diagnostics-noise-validation-file "$run_dir/noise_validation.json"
     )
     if [[ "$stop_after_filter" == "1" ]]; then
       command+=(--edge-diagnostics-stop-after-filter)
@@ -540,6 +564,9 @@ for ratio in $noise_ratios; do
       echo "source_train=$variant_train"
       echo "gpu_id=$gpu_id"
       echo "stop_after_filter=$stop_after_filter"
+      echo "replacement_selection=$replacement_selection"
+      echo "hard_candidate_pool=$hard_candidate_pool"
+      echo "hard_support_limit=$hard_support_limit"
       printf 'command='
       printf '%q ' "${command[@]}"
       printf '\n'
@@ -552,6 +579,15 @@ for ratio in $noise_ratios; do
       export OMP_NUM_THREADS="$omp_threads"
       "${command[@]}"
     ) 2>&1 | tee "$run_dir/training.log"
+
+    if [[ "$run_pilot_analysis" == "1" ]]; then
+      python3 "$script_dir/analyze_edge_diagnostics.py" \
+        --diagnostics-dir "$run_dir/edge_diagnostics" \
+        --labels "$run_dir/synthetic_edge_labels.csv" \
+        --noise-validation "$run_dir/noise_validation.json" \
+        --output "$run_dir/pilot_analysis.json" \
+        2>&1 | tee "$run_dir/pilot_analysis.log"
+    fi
 
     git -C "$repo_root" worktree remove --force "$active_worktree"
     active_worktree=""

@@ -12,6 +12,7 @@ if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
 from generate_degree_preserving_replace import (  # noqa: E402
+    HARD_PROTOCOL_NAME,
     PROTOCOL_NAME,
     _read_train,
     generate_degree_preserving_replace,
@@ -99,6 +100,58 @@ class DegreePreservingReplaceTest(unittest.TestCase):
             self.assertEqual(first[2].read_bytes(), second[2].read_bytes())
             self.assertEqual(first[3].read_bytes(), second[3].read_bytes())
             self.assertEqual(first[4].read_bytes(), second[4].read_bytes())
+
+    def test_hard_two_hop_selection_preserves_graph_invariants(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            clean = root / "train.txt"
+            clean.write_text(SMALL_TRAIN, encoding="utf-8")
+            result = generate_degree_preserving_replace(
+                clean_train=clean,
+                requested_ratio=0.5,
+                seed=11,
+                output_train=root / "variant.txt",
+                labels_path=root / "labels.csv",
+                generation_metadata_path=root / "generation.json",
+                validation_path=root / "validation.json",
+                selection="hard_two_hop",
+                candidate_pool_size=3,
+                structural_support_limit=4,
+            )
+            metadata = json.loads((root / "generation.json").read_text())
+            self.assertEqual(result["synthetic_noise_type"], HARD_PROTOCOL_NAME)
+            self.assertEqual(metadata["selection"], "hard_two_hop")
+            self.assertEqual(metadata["candidate_pool_size"], 3)
+            self.assertGreaterEqual(
+                metadata["hard_chosen_score_mean"],
+                metadata["hard_candidate_score_mean"],
+            )
+            self.assertTrue(result["all_user_degrees_preserved"])
+            self.assertTrue(result["all_item_degrees_preserved"])
+
+    def test_hard_two_hop_same_seed_is_byte_reproducible(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            clean = root / "train.txt"
+            clean.write_text(SMALL_TRAIN, encoding="utf-8")
+            outputs = []
+            for suffix in ("a", "b"):
+                output = root / ("variant_%s.txt" % suffix)
+                labels = root / ("labels_%s.csv" % suffix)
+                generate_degree_preserving_replace(
+                    clean_train=clean,
+                    requested_ratio=0.5,
+                    seed=19,
+                    output_train=output,
+                    labels_path=labels,
+                    generation_metadata_path=root / ("generation_%s.json" % suffix),
+                    validation_path=root / ("validation_%s.json" % suffix),
+                    selection="hard_two_hop",
+                    candidate_pool_size=3,
+                    structural_support_limit=4,
+                )
+                outputs.append((output.read_bytes(), labels.read_bytes()))
+            self.assertEqual(outputs[0], outputs[1])
 
     def test_odd_requested_count_is_adjusted_to_complete_swap_pairs(self):
         with tempfile.TemporaryDirectory() as temp:

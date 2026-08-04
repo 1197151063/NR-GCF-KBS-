@@ -41,8 +41,8 @@ def parse_args():
     parser.add_argument('--edge-diagnostics-dir', type=str, default='edge_diagnostics',
                         help='diagnostics output directory (default: ./edge_diagnostics)')
     parser.add_argument('--edge-diagnostics-format', type=str, default='parquet',
-                        choices=['parquet', 'csv'],
-                        help='preferred diagnostics part format; parquet falls back to CSV without pyarrow')
+                        choices=['parquet', 'csv', 'csv_gzip'],
+                        help='streaming diagnostics format; parquet falls back to one gzip CSV without pyarrow')
     parser.add_argument('--edge-diagnostics-structural-mode', type=str,
                         default='two_hop_minhash',
                         choices=['two_hop_minhash', 'none'],
@@ -50,7 +50,11 @@ def parse_args():
     parser.add_argument('--edge-diagnostics-topk', type=int, default=10,
                         help='top-k for bounded structural neighbor summaries')
     parser.add_argument('--edge-diagnostics-chunk-size', type=int, default=8192,
-                        help='number of edge rows computed and written per diagnostics part')
+                        help='number of edge rows computed per streaming write')
+    parser.add_argument('--edge-diagnostics-labels-file', type=str, default=None,
+                        help='optional ordered synthetic-label CSV used only during diagnostics export')
+    parser.add_argument('--edge-diagnostics-noise-validation-file', type=str, default=None,
+                        help='optional validated noise metadata JSON copied into diagnostics provenance')
     parser.add_argument('--edge-diagnostics-verify-invariance', action='store_true',
                         help='verify exporter leaves tracked tensors, parameters, and RNG state unchanged')
     parser.add_argument('--edge-diagnostics-min-degree', type=int, default=2,

@@ -145,8 +145,27 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(mapping, ["raw-user-a", "raw-user-b"])
 
+    def test_synthetic_label_reader_validates_stable_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "labels.csv")
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow([
+                    "edge_id", "user_id_internal", "item_id_internal",
+                    "is_original_observed_edge", "synthetic_is_noisy",
+                    "synthetic_noise_type",
+                ])
+                writer.writerow([0, 2, 3, True, False, ""])
+                writer.writerow([1, 4, 5, False, True, "toy_noise"])
+            reader = diagnostics.SyntheticLabelReader(path)
+            chunk = reader.read_chunk(0, 2, [2, 4], [3, 5], [False, True])
+            reader.verify_complete()
+            reader.close()
+        self.assertEqual(chunk["synthetic_is_noisy"], [False, True])
+        self.assertEqual(reader.noisy_removed_count, 1)
+
     @unittest.skipIf(diagnostics.torch is None, "PyTorch is unavailable")
-    def test_small_export_uses_raw_mappings_and_v2_metadata(self):
+    def test_small_export_uses_raw_mappings_labels_and_v3_metadata(self):
         torch = diagnostics.torch
         with tempfile.TemporaryDirectory() as directory:
             dataset_dir = os.path.join(directory, "data", "toy")
@@ -158,6 +177,23 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
                 stream.write("org_id remap_id\ni0-raw 0\ni1-raw 1\n")
 
             edge_index = torch.tensor(self.edges, dtype=torch.long).t()
+            labels_path = os.path.join(directory, "labels.csv")
+            with open(labels_path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.writer(stream)
+                writer.writerow([
+                    "edge_id", "user_id_internal", "item_id_internal",
+                    "is_original_observed_edge", "synthetic_is_noisy",
+                    "synthetic_noise_type",
+                ])
+                for edge_id, (user, item) in enumerate(self.edges):
+                    noisy = edge_id == len(self.edges) - 1
+                    writer.writerow([
+                        edge_id, user, item, not noisy, noisy,
+                        "toy_noise" if noisy else "",
+                    ])
+            validation_path = os.path.join(directory, "noise_validation.json")
+            with open(validation_path, "w", encoding="utf-8") as stream:
+                json.dump({"actual_noise_ratio": 1.0 / len(self.edges)}, stream)
             history = diagnostics.EdgeLossHistory(len(self.edges))
             edge_ids = torch.arange(len(self.edges))
             history.observe(edge_ids, torch.linspace(0.1, 0.5, len(self.edges)))
@@ -174,6 +210,8 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
                 edge_diagnostics_min_degree=2,
                 edge_diagnostics_structural_mode="two_hop_minhash",
                 edge_diagnostics_format="csv",
+                edge_diagnostics_labels_file=labels_path,
+                edge_diagnostics_noise_validation_file=validation_path,
             )
             guard_model = torch.nn.Linear(1, 1)
             guard = diagnostics.DiagnosticsInvarianceGuard(
@@ -205,7 +243,7 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
                 threshold=0.8,
             )
             invariance = guard.verify()
-            with open(os.path.join(output_dir, "edge_diagnostics_part_00000.csv"), newline="") as stream:
+            with open(os.path.join(output_dir, "edge_diagnostics.csv"), newline="") as stream:
                 first = next(csv.DictReader(stream))
             with open(os.path.join(output_dir, "metadata.json")) as stream:
                 metadata = json.load(stream)
@@ -214,6 +252,8 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertEqual(metadata["diagnostics_schema_version"], diagnostics.SCHEMA_VERSION)
         self.assertTrue(metadata["seed_is_applied_by_current_nrgcf_code"])
         self.assertEqual(metadata["structural_signature_dim"], diagnostics.MINHASH_DIM)
+        self.assertTrue(metadata["synthetic_labels_available"])
+        self.assertAlmostEqual(metadata["actual_noise_ratio"], 1.0 / len(self.edges))
         self.assertTrue(invariance["passed"])
 
     def test_duplicate_edges_keep_distinct_edge_ids(self):
@@ -252,11 +292,19 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
                     value = "test"
                 columns[name] = [value, value]
             path = writer.write(columns)
+            writer.write(columns)
+            writer.close()
             self.assertTrue(os.path.exists(path))
             with open(path, newline="", encoding="utf-8") as stream:
                 rows = list(csv.reader(stream))
             self.assertEqual(rows[0], diagnostics.FIELD_NAMES)
-            self.assertEqual(len(rows), 3)
+            self.assertEqual(len(rows), 5)
+
+        with tempfile.TemporaryDirectory() as directory:
+            writer = diagnostics.PartWriter(directory, "csv_gzip", logger)
+            writer.write(columns)
+            writer.close()
+            self.assertTrue(os.path.exists(os.path.join(directory, "edge_diagnostics.csv.gz")))
 
     def test_diagnostics_arguments_default_off_and_parse(self):
         with mock.patch.object(sys, "argv", ["NR-GCF.py"]):
@@ -266,6 +314,7 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertEqual(args.edge_diagnostics_format, "parquet")
         self.assertEqual(args.edge_diagnostics_structural_mode, "two_hop_minhash")
         self.assertEqual(args.edge_diagnostics_chunk_size, 8192)
+        self.assertIsNone(args.edge_diagnostics_labels_file)
 
         with mock.patch.object(sys, "argv", [
             "NR-GCF.py",

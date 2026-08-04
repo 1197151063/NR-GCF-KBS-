@@ -12,6 +12,7 @@ and for documenting the exact leave-one-edge-out feature definition.
 from __future__ import print_function
 
 import csv
+import gzip
 import json
 import logging
 import math
@@ -34,7 +35,7 @@ def _no_grad():
     return torch.no_grad()
 
 
-SCHEMA_VERSION = "nrgcf_edge_diagnostics_v2"
+SCHEMA_VERSION = "nrgcf_edge_diagnostics_v3"
 MINHASH_DIM = 128
 MINHASH_PRIME = 2147483647
 MINHASH_BUILD_DIM_CHUNK = 8
@@ -49,9 +50,9 @@ FIELD_SPECS = [
     ("user_id_raw", "string", True, "Original user ID loaded from user_list.txt when the mapping is available."),
     ("item_id_raw", "string", True, "Original item ID loaded from item_list.txt when the mapping is available."),
     ("edge_position_in_training_graph", "int64", False, "Stable original training-edge column position."),
-    ("is_original_observed_edge", "bool", True, "Null: current loader cannot distinguish original observations from injected synthetic edges."),
-    ("synthetic_is_noisy", "bool", True, "Null: the current loader has no synthetic-noise label."),
-    ("synthetic_noise_type", "string", True, "Null: the current loader has no synthetic-noise type."),
+    ("is_original_observed_edge", "bool", True, "Optional validated sidecar label; null when no label file is supplied."),
+    ("synthetic_is_noisy", "bool", True, "Optional post-export evaluation label; never used by feature computation or filtering."),
+    ("synthetic_noise_type", "string", True, "Optional validated synthetic-noise protocol name."),
     ("train_split_identifier", "string", False, "Dataset train split identifier."),
     ("graph_version_identifier", "string", False, "Graph version used for edge identity and structural features."),
     ("raw_edge_loss_at_filter_epoch", "float64", True, "Null: current code does not compute per-edge loss at epoch 15."),
@@ -562,6 +563,8 @@ def _to_arrow_values(value):
 
 
 class PartWriter(object):
+    """Write chunks into one streaming artifact instead of one file per chunk."""
+
     def __init__(self, output_dir, requested_format, logger):
         self.output_dir = output_dir
         self.requested_format = requested_format
@@ -571,18 +574,45 @@ class PartWriter(object):
         self.part_index = 0
         self.pa = None
         self.pq = None
+        self.parquet_writer = None
+        self.csv_stream = None
+        self.csv_writer = None
+        self.path = None
+        self.parquet_compression = None
         if requested_format == "parquet":
             try:
                 import pyarrow as pa
                 import pyarrow.parquet as pq
                 self.pa = pa
                 self.pq = pq
-            except ImportError as exc:
-                self.actual_format = "csv"
+                codec = getattr(pa, "Codec", None)
+                if codec is not None and codec.is_available("zstd"):
+                    self.parquet_compression = "zstd"
+                elif codec is not None and codec.is_available("snappy"):
+                    self.parquet_compression = "snappy"
+            except Exception as exc:
+                self.actual_format = "csv_gzip"
                 self.fallback_reason = "pyarrow unavailable: %s" % exc
                 self.logger.warning(
-                    "Parquet requested but pyarrow is unavailable; falling back to chunked CSV."
+                    "Parquet requested but pyarrow is unavailable; falling back to one gzip CSV."
                 )
+
+        if self.actual_format == "parquet":
+            self.path = os.path.join(self.output_dir, "edge_diagnostics.parquet")
+        elif self.actual_format == "csv_gzip":
+            self.path = os.path.join(self.output_dir, "edge_diagnostics.csv.gz")
+            self.csv_stream = gzip.open(
+                self.path, "wt", newline="", encoding="utf-8", compresslevel=6
+            )
+            self.csv_writer = csv.writer(self.csv_stream)
+            self.csv_writer.writerow(FIELD_NAMES)
+        else:
+            self.path = os.path.join(self.output_dir, "edge_diagnostics.csv")
+            self.csv_stream = open(
+                self.path, "w", newline="", encoding="utf-8"
+            )
+            self.csv_writer = csv.writer(self.csv_stream)
+            self.csv_writer.writerow(FIELD_NAMES)
 
     def _arrow_type(self, dtype):
         if dtype == "int64":
@@ -594,28 +624,140 @@ class PartWriter(object):
         return self.pa.string()
 
     def write(self, columns):
-        extension = "parquet" if self.actual_format == "parquet" else "csv"
-        filename = "edge_diagnostics_part_%05d.%s" % (self.part_index, extension)
-        path = os.path.join(self.output_dir, filename)
         if self.actual_format == "parquet":
             arrays = []
             for name in FIELD_NAMES:
                 values = _to_arrow_values(columns[name])
                 arrays.append(self.pa.array(values, type=self._arrow_type(FIELD_TYPES[name])))
             table = self.pa.Table.from_arrays(arrays, names=FIELD_NAMES)
-            self.pq.write_table(table, path)
+            if self.parquet_writer is None:
+                self.parquet_writer = self.pq.ParquetWriter(
+                    self.path, table.schema, compression=self.parquet_compression
+                )
+            self.parquet_writer.write_table(table)
         else:
             python_columns = dict(
                 (name, _to_python_list(columns[name])) for name in FIELD_NAMES
             )
             row_count = len(python_columns[FIELD_NAMES[0]])
-            with open(path, "w", newline="", encoding="utf-8") as stream:
-                writer = csv.writer(stream)
-                writer.writerow(FIELD_NAMES)
-                for row_index in range(row_count):
-                    writer.writerow([python_columns[name][row_index] for name in FIELD_NAMES])
+            for row_index in range(row_count):
+                self.csv_writer.writerow(
+                    [python_columns[name][row_index] for name in FIELD_NAMES]
+                )
         self.part_index += 1
-        return path
+        return self.path
+
+    def close(self):
+        if self.parquet_writer is not None:
+            self.parquet_writer.close()
+            self.parquet_writer = None
+        if self.csv_stream is not None:
+            self.csv_stream.close()
+            self.csv_stream = None
+
+
+def _parse_nullable_bool(value, field_name, edge_id):
+    if value is None or value == "":
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in ("true", "1"):
+        return True
+    if normalized in ("false", "0"):
+        return False
+    raise ValueError(
+        "Invalid %s=%r for synthetic label edge_id=%d"
+        % (field_name, value, edge_id)
+    )
+
+
+class SyntheticLabelReader(object):
+    """Stream and validate a label sidecar without exposing it to features."""
+
+    REQUIRED_FIELDS = {
+        "edge_id",
+        "user_id_internal",
+        "item_id_internal",
+        "is_original_observed_edge",
+        "synthetic_is_noisy",
+        "synthetic_noise_type",
+    }
+
+    def __init__(self, path):
+        self.path = os.path.abspath(path)
+        self.stream = open(self.path, newline="", encoding="utf-8")
+        self.reader = csv.DictReader(self.stream)
+        missing = self.REQUIRED_FIELDS - set(self.reader.fieldnames or [])
+        if missing:
+            self.close()
+            raise ValueError("Synthetic label CSV is missing fields: %s" % sorted(missing))
+        self.clean_count = 0
+        self.noisy_count = 0
+        self.clean_removed_count = 0
+        self.noisy_removed_count = 0
+
+    def read_chunk(self, start, end, users, items, removed):
+        original = []
+        noisy = []
+        noise_type = []
+        for offset, expected_edge_id in enumerate(range(int(start), int(end))):
+            try:
+                row = next(self.reader)
+            except StopIteration:
+                raise ValueError(
+                    "Synthetic label CSV ended before edge_id=%d" % expected_edge_id
+                )
+            edge_id = int(row["edge_id"])
+            user = int(row["user_id_internal"])
+            item = int(row["item_id_internal"])
+            if edge_id != expected_edge_id:
+                raise ValueError(
+                    "Synthetic label edge_id mismatch: expected=%d actual=%d"
+                    % (expected_edge_id, edge_id)
+                )
+            if user != int(users[offset]) or item != int(items[offset]):
+                raise ValueError(
+                    "Synthetic label endpoint mismatch at edge_id=%d" % edge_id
+                )
+            is_original = _parse_nullable_bool(
+                row["is_original_observed_edge"],
+                "is_original_observed_edge",
+                edge_id,
+            )
+            is_noisy = _parse_nullable_bool(
+                row["synthetic_is_noisy"], "synthetic_is_noisy", edge_id
+            )
+            if is_original is not None and is_noisy is not None:
+                if is_original == is_noisy:
+                    raise ValueError(
+                        "Synthetic clean/noisy labels are inconsistent at edge_id=%d"
+                        % edge_id
+                    )
+                if is_noisy:
+                    self.noisy_count += 1
+                    self.noisy_removed_count += int(bool(removed[offset]))
+                else:
+                    self.clean_count += 1
+                    self.clean_removed_count += int(bool(removed[offset]))
+            original.append(is_original)
+            noisy.append(is_noisy)
+            noise_type.append(row["synthetic_noise_type"] or None)
+        return {
+            "is_original_observed_edge": original,
+            "synthetic_is_noisy": noisy,
+            "synthetic_noise_type": noise_type,
+        }
+
+    def verify_complete(self):
+        extra = next(self.reader, None)
+        if extra is not None:
+            raise ValueError(
+                "Synthetic label CSV contains extra edge_id=%s" % extra.get("edge_id")
+            )
+
+    def close(self):
+        if self.stream is not None:
+            self.stream.close()
+            self.stream = None
 
 
 class RunningStats(object):
@@ -738,6 +880,10 @@ class SummaryBuilder(object):
         self.overall = dict((name, RunningStats(stride)) for name in numeric_names)
         self.grouped = defaultdict(dict)
         self.stride = stride
+        self.synthetic_clean_count = 0
+        self.synthetic_noisy_count = 0
+        self.synthetic_clean_removed_count = 0
+        self.synthetic_noisy_removed_count = 0
 
     def _group_stats(self, group_name):
         if not self.grouped[group_name]:
@@ -763,6 +909,20 @@ class SummaryBuilder(object):
             "degree_21_100": (min_degree >= 21) & (min_degree <= 100),
             "degree_gt_100": min_degree > 100,
         }
+        synthetic_labels = columns.get("synthetic_is_noisy")
+        if synthetic_labels and all(value is not None for value in synthetic_labels):
+            noisy_mask = torch.tensor(synthetic_labels, dtype=torch.bool)
+            clean_mask = ~noisy_mask
+            groups["synthetic_clean"] = clean_mask
+            groups["synthetic_noisy"] = noisy_mask
+            self.synthetic_clean_count += int(clean_mask.sum().item())
+            self.synthetic_noisy_count += int(noisy_mask.sum().item())
+            self.synthetic_clean_removed_count += int(
+                (clean_mask & removed).sum().item()
+            )
+            self.synthetic_noisy_removed_count += int(
+                (noisy_mask & removed).sum().item()
+            )
         for group_name, mask in groups.items():
             group_edge_ids = edge_ids[mask]
             stats_by_name = self._group_stats(group_name)
@@ -1081,41 +1241,58 @@ class EdgeDiagnosticsExporter(object):
         writer = PartWriter(
             self.output_dir, self.args.edge_diagnostics_format, self.logger
         )
+        labels_path = getattr(self.args, "edge_diagnostics_labels_file", None)
+        label_reader = SyntheticLabelReader(labels_path) if labels_path else None
         summary_builder = SummaryBuilder(edge_count)
-        for start in range(0, edge_count, chunk_size):
-            end = min(edge_count, start + chunk_size)
-            columns = self._basic_columns(
-                start=start,
-                end=end,
-                edge_index=edge_index,
-                history=history,
-                raw_momentum=raw_momentum,
-                normalized_score=normalized_score,
-                retained_mask=retained_mask,
-                threshold=threshold,
-                filtering_epoch=filtering_epoch,
-                warmup_epoch_count=warmup_epoch_count,
-                user_degree=user_degree_cpu,
-                item_degree=item_degree_cpu,
-                min_degree=min_degree,
-            )
-            structure = engine.compute_chunk(start, end)
-            columns.update(structure)
-            columns.update(self._joint_columns(
-                structure=structure,
-                normalized_score=columns["normalized_edge_score"],
-                retained=columns["nr_gcf_retained"],
-                thresholds=thresholds,
-            ))
-            missing = set(FIELD_NAMES) - set(columns)
-            extra = set(columns) - set(FIELD_NAMES)
-            if missing or extra:
-                raise RuntimeError("diagnostics schema mismatch; missing=%s extra=%s" % (
-                    sorted(missing), sorted(extra)
+        try:
+            for start in range(0, edge_count, chunk_size):
+                end = min(edge_count, start + chunk_size)
+                columns = self._basic_columns(
+                    start=start,
+                    end=end,
+                    edge_index=edge_index,
+                    history=history,
+                    raw_momentum=raw_momentum,
+                    normalized_score=normalized_score,
+                    retained_mask=retained_mask,
+                    threshold=threshold,
+                    filtering_epoch=filtering_epoch,
+                    warmup_epoch_count=warmup_epoch_count,
+                    user_degree=user_degree_cpu,
+                    item_degree=item_degree_cpu,
+                    min_degree=min_degree,
+                )
+                structure = engine.compute_chunk(start, end)
+                columns.update(structure)
+                columns.update(self._joint_columns(
+                    structure=structure,
+                    normalized_score=columns["normalized_edge_score"],
+                    retained=columns["nr_gcf_retained"],
+                    thresholds=thresholds,
                 ))
-            summary_builder.update(columns)
-            path = writer.write(columns)
-            self.logger.info("Wrote edges [%d, %d) to %s", start, end, path)
+                if label_reader is not None:
+                    columns.update(label_reader.read_chunk(
+                        start,
+                        end,
+                        columns["user_id_internal"].tolist(),
+                        columns["item_id_internal"].tolist(),
+                        columns["nr_gcf_removed"].tolist(),
+                    ))
+                missing = set(FIELD_NAMES) - set(columns)
+                extra = set(columns) - set(FIELD_NAMES)
+                if missing or extra:
+                    raise RuntimeError("diagnostics schema mismatch; missing=%s extra=%s" % (
+                        sorted(missing), sorted(extra)
+                    ))
+                summary_builder.update(columns)
+                path = writer.write(columns)
+                self.logger.info("Wrote edges [%d, %d) to %s", start, end, path)
+            if label_reader is not None:
+                label_reader.verify_complete()
+        finally:
+            writer.close()
+            if label_reader is not None:
+                label_reader.close()
 
         retained_count = int(retained_mask.to(torch.int64).sum().item())
         removed_count = edge_count - retained_count
@@ -1123,13 +1300,24 @@ class EdgeDiagnosticsExporter(object):
             (name, value if isinstance(value, (int, float)) and math.isfinite(value) else None)
             for name, value in thresholds.items()
         )
+        noise_validation = None
+        noise_validation_path = getattr(
+            self.args, "edge_diagnostics_noise_validation_file", None
+        )
+        if noise_validation_path:
+            with open(noise_validation_path, encoding="utf-8") as stream:
+                noise_validation = json.load(stream)
+        actual_noise_ratio = (
+            noise_validation.get("actual_noise_ratio")
+            if isinstance(noise_validation, dict) else None
+        )
         metadata = {
             "dataset": self.args.dataset,
             "seed_argument": self.args.seed,
             "seed_is_applied_by_current_nrgcf_code": True,
             "seed_reproducibility_scope": "Python, NumPy, torch CPU, and all visible CUDA generators are seeded before data/model construction; sparse CUDA kernels may still have platform-specific nondeterminism.",
             "requested_noise_ratio": self.args.requested_noise_ratio,
-            "actual_noise_ratio": None,
+            "actual_noise_ratio": actual_noise_ratio,
             "number_of_users": int(num_users),
             "number_of_items": int(num_items),
             "train_edge_count": edge_count,
@@ -1150,6 +1338,9 @@ class EdgeDiagnosticsExporter(object):
             "requested_format": writer.requested_format,
             "actual_format": writer.actual_format,
             "format_fallback_reason": writer.fallback_reason,
+            "parquet_compression": writer.parquet_compression,
+            "edge_table_path": os.path.basename(writer.path),
+            "streaming_write_count": writer.part_index,
             "structural_mode": self.args.edge_diagnostics_structural_mode,
             "structural_signature_dim": MINHASH_DIM if engine.enabled else None,
             "topk": topk,
@@ -1189,20 +1380,36 @@ class EdgeDiagnosticsExporter(object):
             },
             "structural_feature_notes": diagnostics_schema()["structural_approximation"],
             "raw_edge_loss_at_filter_epoch_available": False,
-            "is_original_observed_edge_available": False,
-            "synthetic_labels_available": False,
+            "is_original_observed_edge_available": label_reader is not None,
+            "synthetic_labels_available": label_reader is not None,
+            "synthetic_label_source": os.path.abspath(labels_path) if labels_path else None,
+            "noise_validation": noise_validation,
         }
         summary = summary_builder.result()
+        clean_count = summary_builder.synthetic_clean_count if label_reader else None
+        noisy_count = summary_builder.synthetic_noisy_count if label_reader else None
         summary.update({
             "total_edge_count": edge_count,
             "retained_edge_count": retained_count,
             "removed_edge_count": removed_count,
             "removed_ratio": float(removed_count) / max(edge_count, 1),
-            "synthetic_clean_count": None,
-            "synthetic_noisy_count": None,
-            "clean_removal_rate": None,
-            "noisy_removal_rate": None,
-            "clean_noisy_group_statistics": None,
+            "synthetic_clean_count": clean_count,
+            "synthetic_noisy_count": noisy_count,
+            "clean_removal_rate": (
+                float(summary_builder.synthetic_clean_removed_count) / clean_count
+                if clean_count else None
+            ),
+            "noisy_removal_rate": (
+                float(summary_builder.synthetic_noisy_removed_count) / noisy_count
+                if noisy_count else None
+            ),
+            "clean_noisy_group_statistics": (
+                {
+                    "synthetic_clean": summary["removed_retained_and_degree_bucket_statistics"].get("synthetic_clean"),
+                    "synthetic_noisy": summary["removed_retained_and_degree_bucket_statistics"].get("synthetic_noisy"),
+                }
+                if label_reader else None
+            ),
         })
         _write_json(os.path.join(self.output_dir, "metadata.json"), metadata)
         _write_json(os.path.join(self.output_dir, "schema.json"), diagnostics_schema())

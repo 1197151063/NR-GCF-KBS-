@@ -58,8 +58,17 @@ PY
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv
 ```
 
-Do not install or upgrade `pyarrow` merely for diagnostics.  If it is absent,
-the exporter logs the reason and writes chunked CSV parts.
+Do not install or upgrade `pyarrow` merely for diagnostics. If it is absent,
+the exporter logs the reason and writes one streaming
+`edge_diagnostics.csv.gz` file. With `pyarrow`, all chunks are appended to one
+Zstandard-compressed `edge_diagnostics.parquet` file. The full edge table is
+never retained in memory.
+
+Synthetic labels can be supplied through
+`--edge-diagnostics-labels-file`. They are checked against edge ID and both
+endpoints while streaming, written into the diagnostic table, and used only
+by post-export summaries. They never enter feature computation, filtering, or
+training.
 
 ## Structural score used by diagnostics v2
 
@@ -182,6 +191,42 @@ PYTHONHASHSEED="$SEED" CUDA_VISIBLE_DEVICES="$GPU_ID" python NR-GCF.py \
   2>&1 | tee "$OUTPUT_DIR/training.log"
 ```
 
+## Focused hard-replacement pilot
+
+The repository includes `code/run_hard_replace_pilot.sh`. It runs one 10%
+degree-preserving replacement pilot with seed 2026 by default. Unlike uniform
+replacement, each swap is selected from a small random candidate pool using a
+bounded leave-one-out bilateral two-hop score. This creates false edges that
+are more structurally plausible while still preserving every user and item
+degree exactly. It does not read validation/test data and does not construct a
+dense node-by-node matrix.
+
+From `code/` on the GPU server:
+
+```bash
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs \
+bash run_hard_replace_pilot.sh
+```
+
+Portable form:
+
+```bash
+DATASET=DATASET \
+NOISE_RATIOS=0.10 \
+SEEDS=2026 \
+GPU_ID=GPU_ID \
+OUTPUT_ROOT=OUTPUT_DIR \
+HARD_CANDIDATE_POOL=8 \
+HARD_SUPPORT_LIMIT=16 \
+bash run_hard_replace_pilot.sh
+```
+
+The launcher automatically creates `pilot_analysis.json` after diagnostics.
+It contains clean/noisy metrics, degree controls, filtering precision/recall,
+momentum–structure correlations, the four diagnostic quadrants, and an
+explicitly exploratory rank-fusion scan. No classifier is trained.
+
 ## Files to return after a remote run
 
 Copy back, without changing their relative names:
@@ -190,14 +235,17 @@ Copy back, without changing their relative names:
 - `edge_diagnostics/schema.json`
 - `edge_diagnostics/summary.json`
 - `edge_diagnostics/invariance.json` when verification was enabled
-- every `edge_diagnostics/edge_diagnostics_part_*` file
+- `edge_diagnostics/edge_diagnostics.parquet`, or the automatic fallback
+  `edge_diagnostics/edge_diagnostics.csv.gz`
 - `edge_diagnostics/logs/diagnostics.log`
 - the captured `training.log`
+- `pilot_analysis.json` and `pilot_analysis.log`
 - the exact command/configuration used for the run
 - the Git commit hash and dirty-worktree state recorded in `metadata.json`
 - the server-side run identifier and checkpoint hash, if the external training
   workflow creates a checkpoint
 
-The current NR-GCF entry does not save checkpoints and does not expose an
-actual synthetic-noise label or actual noise ratio.  Those values remain null
-unless a separate, provenance-preserving data pipeline is connected later.
+The current NR-GCF entry does not save checkpoints. The grid launcher now
+connects its validated synthetic-label and noise-validation sidecars to the
+diagnostics exporter; direct runs that omit those arguments keep the label and
+actual-noise fields null.
