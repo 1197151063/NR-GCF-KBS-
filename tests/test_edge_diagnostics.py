@@ -1,10 +1,12 @@
 import csv
+import json
 import logging
 import math
 import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -61,6 +63,159 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertIsNone(tail["item_side_structure_mean"])
         self.assertEqual(tail["item_side_valid_neighbor_count"], 0)
 
+    @unittest.skipIf(diagnostics.torch is None, "PyTorch is unavailable")
+    def test_minhash_structure_tracks_exact_small_graph(self):
+        edge_index = diagnostics.torch.tensor(self.edges, dtype=diagnostics.torch.long).t()
+        engine = diagnostics.TwoHopMinHash(
+            edge_index=edge_index,
+            num_users=3,
+            num_items=2,
+            topk=2,
+            structural_mode="two_hop_minhash",
+        )
+        approximate = engine.compute_chunk(0, len(self.edges))
+        exact = diagnostics.compute_structural_features_reference(self.edges, topk=2)
+        self.assertAlmostEqual(
+            float(approximate["user_side_structure_mean"][0]),
+            exact[0]["user_side_structure_mean"],
+            delta=0.15,
+        )
+        self.assertAlmostEqual(
+            float(approximate["item_side_structure_mean"][0]),
+            exact[0]["item_side_structure_mean"],
+            delta=0.15,
+        )
+        self.assertTrue(
+            math.isnan(float(approximate["item_side_structure_mean"][4]))
+        )
+
+    @unittest.skipIf(diagnostics.torch is None, "PyTorch is unavailable")
+    def test_minhash_does_not_turn_degree_into_overlap(self):
+        # Both endpoints have degree two, but after removing (0, 0) the
+        # candidate and comparison neighborhoods are disjoint on both sides.
+        edges = [(0, 0), (0, 1), (1, 0), (2, 1)]
+        edge_index = diagnostics.torch.tensor(edges, dtype=diagnostics.torch.long).t()
+        engine = diagnostics.TwoHopMinHash(
+            edge_index=edge_index,
+            num_users=3,
+            num_items=2,
+            topk=2,
+            structural_mode="two_hop_minhash",
+        )
+        result = engine.compute_chunk(0, len(edges))
+        self.assertEqual(float(result["user_side_structure_mean"][0]), 0.0)
+        self.assertEqual(float(result["item_side_structure_mean"][0]), 0.0)
+
+    @unittest.skipIf(diagnostics.torch is None, "PyTorch is unavailable")
+    def test_minhash_has_low_error_on_deterministic_small_graph(self):
+        edges = [
+            (user, item)
+            for user in range(20)
+            for item in range(15)
+            if ((user * 17 + item * 11 + user * item * 3) % 13) < 4
+        ]
+        edge_index = diagnostics.torch.tensor(
+            edges, dtype=diagnostics.torch.long
+        ).t()
+        engine = diagnostics.TwoHopMinHash(
+            edge_index=edge_index,
+            num_users=20,
+            num_items=15,
+            topk=10,
+            structural_mode="two_hop_minhash",
+        )
+        approximate = engine.compute_chunk(0, len(edges))
+        exact = diagnostics.compute_structural_features_reference(edges, topk=10)
+        for side in ("user", "item"):
+            errors = []
+            field = "%s_side_structure_mean" % side
+            for edge_id, row in enumerate(exact):
+                expected = row[field]
+                observed = float(approximate[field][edge_id])
+                if expected is not None and math.isfinite(observed):
+                    errors.append(abs(expected - observed))
+            self.assertLess(sum(errors) / len(errors), 0.05)
+
+    def test_raw_id_mapping_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "user_list.txt")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write("org_id remap_id\nraw-user-b 1\nraw-user-a 0\n")
+            mapping, error = diagnostics.load_raw_id_mapping(path, expected_count=2)
+        self.assertIsNone(error)
+        self.assertEqual(mapping, ["raw-user-a", "raw-user-b"])
+
+    @unittest.skipIf(diagnostics.torch is None, "PyTorch is unavailable")
+    def test_small_export_uses_raw_mappings_and_v2_metadata(self):
+        torch = diagnostics.torch
+        with tempfile.TemporaryDirectory() as directory:
+            dataset_dir = os.path.join(directory, "data", "toy")
+            output_dir = os.path.join(directory, "run", "edge_diagnostics")
+            os.makedirs(dataset_dir)
+            with open(os.path.join(dataset_dir, "user_list.txt"), "w") as stream:
+                stream.write("org_id remap_id\nu0-raw 0\nu1-raw 1\nu2-raw 2\n")
+            with open(os.path.join(dataset_dir, "item_list.txt"), "w") as stream:
+                stream.write("org_id remap_id\ni0-raw 0\ni1-raw 1\n")
+
+            edge_index = torch.tensor(self.edges, dtype=torch.long).t()
+            history = diagnostics.EdgeLossHistory(len(self.edges))
+            edge_ids = torch.arange(len(self.edges))
+            history.observe(edge_ids, torch.linspace(0.1, 0.5, len(self.edges)))
+            normalized = torch.linspace(0.1, 0.9, len(self.edges))
+            post_threshold = normalized.clone()
+            post_threshold[post_threshold > 0.8] = 0
+            retained = post_threshold > 0
+            args = SimpleNamespace(
+                dataset="toy",
+                seed=7,
+                requested_noise_ratio=0.0,
+                edge_diagnostics_chunk_size=3,
+                edge_diagnostics_topk=2,
+                edge_diagnostics_min_degree=2,
+                edge_diagnostics_structural_mode="two_hop_minhash",
+                edge_diagnostics_format="csv",
+            )
+            guard_model = torch.nn.Linear(1, 1)
+            guard = diagnostics.DiagnosticsInvarianceGuard(
+                guard_model,
+                {
+                    "edge_index": edge_index,
+                    "normalized": normalized,
+                    "post_threshold": post_threshold,
+                    "retained": retained,
+                },
+            )
+            exporter = diagnostics.EdgeDiagnosticsExporter(
+                args=args,
+                model_config={"beta": 0.8},
+                output_dir=output_dir,
+                repo_dir=directory,
+            )
+            exporter.export(
+                edge_index=edge_index,
+                num_users=3,
+                num_items=2,
+                history=history,
+                raw_momentum=torch.linspace(0.0, 1.0, len(self.edges)),
+                normalized_score=normalized,
+                post_threshold_score=post_threshold,
+                retained_mask=retained,
+                filtering_epoch=15,
+                warmup_epoch_count=1,
+                threshold=0.8,
+            )
+            invariance = guard.verify()
+            with open(os.path.join(output_dir, "edge_diagnostics_part_00000.csv"), newline="") as stream:
+                first = next(csv.DictReader(stream))
+            with open(os.path.join(output_dir, "metadata.json")) as stream:
+                metadata = json.load(stream)
+        self.assertEqual(first["user_id_raw"], "u0-raw")
+        self.assertEqual(first["item_id_raw"], "i0-raw")
+        self.assertEqual(metadata["diagnostics_schema_version"], diagnostics.SCHEMA_VERSION)
+        self.assertTrue(metadata["seed_is_applied_by_current_nrgcf_code"])
+        self.assertEqual(metadata["structural_signature_dim"], diagnostics.MINHASH_DIM)
+        self.assertTrue(invariance["passed"])
+
     def test_duplicate_edges_keep_distinct_edge_ids(self):
         duplicated = [(0, 0), (0, 0), (1, 0)]
         degree_rows = diagnostics.compute_degree_connectivity_reference(duplicated)
@@ -76,6 +231,9 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         schema_names = [field["name"] for field in schema["fields"]]
         self.assertEqual(schema_names, diagnostics.FIELD_NAMES)
         self.assertEqual(len(schema_names), len(set(schema_names)))
+        fields = dict((field["name"], field) for field in schema["fields"])
+        self.assertEqual(fields["user_id_raw"]["dtype"], "string")
+        self.assertEqual(fields["item_id_raw"]["dtype"], "string")
 
         logger = logging.getLogger("edge-diagnostics-test")
         with tempfile.TemporaryDirectory() as directory:
@@ -106,7 +264,8 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertFalse(args.export_edge_diagnostics)
         self.assertEqual(args.edge_diagnostics_dir, "edge_diagnostics")
         self.assertEqual(args.edge_diagnostics_format, "parquet")
-        self.assertEqual(args.edge_diagnostics_structural_mode, "two_hop_countsketch")
+        self.assertEqual(args.edge_diagnostics_structural_mode, "two_hop_minhash")
+        self.assertEqual(args.edge_diagnostics_chunk_size, 8192)
 
         with mock.patch.object(sys, "argv", [
             "NR-GCF.py",

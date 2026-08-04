@@ -10,38 +10,14 @@ The same commands are packaged in `code/run_edge_diagnostics_remote.sh` with
 `smoke`, `off`, `on`, and `formal` modes. The explicit commands below document
 exactly what the launcher does.
 
-The current NR-GCF entry parses `--seed` but does not apply it to Python,
-NumPy, or PyTorch RNGs.  For on/off comparisons, use this shell helper to seed
-the process before executing the unchanged entry:
+The NR-GCF entry now applies `--seed` to Python, NumPy, torch CPU, and all
+visible CUDA generators before constructing the dataset or model. Exact
+bitwise reproducibility can still depend on sparse CUDA kernels and the
+server's PyTorch/PyG configuration. Set `PYTHONHASHSEED` in the shell as well
+for a fully documented launch environment.
 
-```bash
-run_nrgcf_seeded() {
-  seed_value="$1"
-  shift
-  python - "$seed_value" "$@" <<'PY'
-import random
-import runpy
-import sys
-
-import numpy as np
-import torch
-
-seed = int(sys.argv[1])
-entry_args = sys.argv[2:]
-random.seed(seed)
-np.random.seed(seed)
-torch.manual_seed(seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(seed)
-sys.argv = ["NR-GCF.py"] + entry_args
-runpy.run_path("NR-GCF.py", run_name="__main__")
-PY
-}
-```
-
-This wrapper does not change the repository code or add random draws.  Exact
-bitwise reproducibility can still depend on CUDA kernels and the server's
-PyTorch/PyG configuration.
+The packaged launcher sets `OMP_NUM_THREADS` to 4 by default to avoid malformed
+inherited values. Override it with `NRGCF_OMP_NUM_THREADS` when appropriate.
 
 ## Server environment checks
 
@@ -68,14 +44,46 @@ values = torch.ones(2)
 sparse = torch.sparse_coo_tensor(indices, values, (2, 2)).coalesce()
 dense = torch.ones((2, 2))
 print("cpu_sparse_mm:", torch.sparse.mm(sparse, dense))
+scatter_target = torch.full((2, 1), 2147483647, dtype=torch.int32)
+scatter_index = torch.tensor([[0], [1]], dtype=torch.int64)
+scatter_source = torch.tensor([[7], [3]], dtype=torch.int32)
+scatter_target.scatter_reduce_(0, scatter_index, scatter_source, reduce="amin", include_self=True)
+print("cpu_int32_scatter_amin:", scatter_target)
 if torch.cuda.is_available():
     print("cuda_sparse_mm:", torch.sparse.mm(sparse.cuda(), dense.cuda()).cpu())
+    cuda_target = torch.full((2, 1), 2147483647, dtype=torch.int32, device="cuda")
+    cuda_target.scatter_reduce_(0, scatter_index.cuda(), scatter_source.cuda(), reduce="amin", include_self=True)
+    print("cuda_int32_scatter_amin:", cuda_target.cpu())
 PY
 nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv
 ```
 
 Do not install or upgrade `pyarrow` merely for diagnostics.  If it is absent,
 the exporter logs the reason and writes chunked CSV parts.
+
+## Structural score used by diagnostics v2
+
+`two_hop_minhash` builds deterministic MinHash signatures only from the
+pre-filter training graph. For each target edge, per-hash first/second minima
+remove the target endpoint from the candidate neighborhood. The target is
+compared with at most 16 deterministically selected same-type neighbors.
+
+For candidate/neighbor degrees `a,b`, the signature match rate estimates
+Jaccard similarity `J`. Diagnostics converts it to normalized two-hop overlap:
+
+```text
+estimated_intersection = J * (a + b) / (1 + J)
+structural_similarity  = estimated_intersection / sqrt(a * b)
+```
+
+The estimated intersection is capped by `min(a,b)` before normalization so
+the score remains consistent with possible set overlap under estimation noise.
+
+The exported mean/max/top-k fields summarize these bounded comparisons. This
+avoids the high-degree saturation observed with the previous 64-dimensional
+CountSketch. It remains an approximation: finite signatures and bounded
+neighbor sampling add variance, which is why both valid and sampled neighbor
+counts are exported.
 
 ## GPU smoke test
 
@@ -91,13 +99,14 @@ export SEED=0
 export OUTPUT_DIR=/path/to/a/new/smoke-output
 mkdir -p "$OUTPUT_DIR"
 
-CUDA_VISIBLE_DEVICES="$GPU_ID" run_nrgcf_seeded "$SEED" \
+PYTHONHASHSEED="$SEED" CUDA_VISIBLE_DEVICES="$GPU_ID" python NR-GCF.py \
   --dataset "$DATASET" \
   --seed "$SEED" \
   --export-edge-diagnostics \
+  --requested-noise-ratio 0 \
   --edge-diagnostics-dir "$OUTPUT_DIR/edge_diagnostics" \
   --edge-diagnostics-format parquet \
-  --edge-diagnostics-structural-mode two_hop_countsketch \
+  --edge-diagnostics-structural-mode two_hop_minhash \
   --edge-diagnostics-topk 10 \
   --edge-diagnostics-chunk-size 8192 \
   --edge-diagnostics-verify-invariance \
@@ -107,7 +116,7 @@ CUDA_VISIBLE_DEVICES="$GPU_ID" run_nrgcf_seeded "$SEED" \
 
 ## Diagnostics switch invariance comparison
 
-Use the same prepared dataset and the seeded wrapper.  Both commands stop at
+Use the same prepared dataset and seed. Both commands stop at
 the same filtering point.  Keep the output directories separate.
 
 Diagnostics off:
@@ -116,7 +125,7 @@ Diagnostics off:
 export GPU_ID=0 DATASET=yelp2018 SEED=0
 export OUTPUT_DIR=/path/to/a/new/invariance-off
 mkdir -p "$OUTPUT_DIR"
-CUDA_VISIBLE_DEVICES="$GPU_ID" run_nrgcf_seeded "$SEED" \
+PYTHONHASHSEED="$SEED" CUDA_VISIBLE_DEVICES="$GPU_ID" python NR-GCF.py \
   --dataset "$DATASET" --seed "$SEED" \
   --edge-diagnostics-stop-after-filter \
   2>&1 | tee "$OUTPUT_DIR/training.log"
@@ -127,14 +136,14 @@ Diagnostics on:
 ```bash
 export OUTPUT_DIR=/path/to/a/new/invariance-on
 mkdir -p "$OUTPUT_DIR"
-CUDA_VISIBLE_DEVICES="$GPU_ID" run_nrgcf_seeded "$SEED" \
+PYTHONHASHSEED="$SEED" CUDA_VISIBLE_DEVICES="$GPU_ID" python NR-GCF.py \
   --dataset "$DATASET" --seed "$SEED" \
   --export-edge-diagnostics \
   --edge-diagnostics-dir "$OUTPUT_DIR/edge_diagnostics" \
   --edge-diagnostics-format parquet \
-  --edge-diagnostics-structural-mode two_hop_countsketch \
+  --edge-diagnostics-structural-mode two_hop_minhash \
   --edge-diagnostics-topk 10 \
-  --edge-diagnostics-chunk-size 65536 \
+  --edge-diagnostics-chunk-size 8192 \
   --edge-diagnostics-verify-invariance \
   --edge-diagnostics-stop-after-filter \
   2>&1 | tee "$OUTPUT_DIR/training.log"
@@ -159,16 +168,16 @@ export GPU_ID=GPU_ID
 export OUTPUT_DIR=OUTPUT_DIR
 mkdir -p "$OUTPUT_DIR"
 
-CUDA_VISIBLE_DEVICES="$GPU_ID" run_nrgcf_seeded "$SEED" \
+PYTHONHASHSEED="$SEED" CUDA_VISIBLE_DEVICES="$GPU_ID" python NR-GCF.py \
   --dataset "$DATASET" \
   --seed "$SEED" \
   --requested-noise-ratio "$NOISE_RATIO" \
   --export-edge-diagnostics \
   --edge-diagnostics-dir "$OUTPUT_DIR/edge_diagnostics" \
   --edge-diagnostics-format parquet \
-  --edge-diagnostics-structural-mode two_hop_countsketch \
+  --edge-diagnostics-structural-mode two_hop_minhash \
   --edge-diagnostics-topk 10 \
-  --edge-diagnostics-chunk-size 65536 \
+  --edge-diagnostics-chunk-size 8192 \
   --edge-diagnostics-verify-invariance \
   2>&1 | tee "$OUTPUT_DIR/training.log"
 ```

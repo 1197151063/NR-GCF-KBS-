@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader
 import time
 import utils
 import os
+import random
+import numpy as np
 from model import NRGCF,RecModel
 from utils import init_logger, print_log, write_final_log
 
@@ -83,6 +85,18 @@ def train(dataset:Loader,
     aver_loss /= total_batch
     return aver_loss
 
+
+def seed_runtime(seed):
+    """Apply the existing --seed argument before data/model construction."""
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+seed_runtime(world.seed)
 device = world.device
 dataset = Loader()
 log_path = init_logger(model_name='NR-GCF-new', dataset_name=world.config['dataset'])
@@ -111,7 +125,7 @@ best_recall = 0.
 best_epoch = 0
 best_ndcg = 0.
 # print(model.generate_weight(train_edge_index))
-for epoch in range(1, 2001):
+for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
     loss = train(dataset=dataset,
                  model=model,

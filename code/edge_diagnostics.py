@@ -34,8 +34,10 @@ def _no_grad():
     return torch.no_grad()
 
 
-SCHEMA_VERSION = "nrgcf_edge_diagnostics_v1"
-COUNT_SKETCH_DIM = 64
+SCHEMA_VERSION = "nrgcf_edge_diagnostics_v2"
+MINHASH_DIM = 128
+MINHASH_PRIME = 2147483647
+MINHASH_BUILD_DIM_CHUNK = 8
 QUANTILE_LOW = 0.20
 QUANTILE_HIGH = 0.80
 
@@ -44,8 +46,8 @@ FIELD_SPECS = [
     ("edge_id", "int64", False, "Stable original column position in dataset.train_edge_index."),
     ("user_id_internal", "int64", False, "User ID used directly by NR-GCF."),
     ("item_id_internal", "int64", False, "Item ID used directly by NR-GCF."),
-    ("user_id_raw", "int64", True, "Raw file ID; equal to internal ID because this loader does not remap IDs."),
-    ("item_id_raw", "int64", True, "Raw file ID; equal to internal ID because this loader does not remap IDs."),
+    ("user_id_raw", "string", True, "Original user ID loaded from user_list.txt when the mapping is available."),
+    ("item_id_raw", "string", True, "Original item ID loaded from item_list.txt when the mapping is available."),
     ("edge_position_in_training_graph", "int64", False, "Stable original training-edge column position."),
     ("is_original_observed_edge", "bool", True, "Null: current loader cannot distinguish original observations from injected synthetic edges."),
     ("synthetic_is_noisy", "bool", True, "Null: the current loader has no synthetic-noise label."),
@@ -80,16 +82,16 @@ FIELD_SPECS = [
     ("inverse_user_degree", "float64", False, "Fraction of the user's edge-occurrence degree represented by this edge."),
     ("inverse_item_degree", "float64", False, "Fraction of the item's edge-occurrence degree represented by this edge."),
     ("normalized_degree_product", "float64", False, "1/sqrt(user_degree_before * item_degree_before)."),
-    ("user_side_structure_mean", "float64", True, "CountSketch approximation of mean LOO normalized item-item co-occurrence over all other edge occurrences."),
-    ("user_side_structure_max", "float64", True, "Approximate maximum over deterministic bounded representative neighbors."),
-    ("user_side_structure_topk_mean", "float64", True, "Approximate top-k mean over deterministic bounded representative neighbors."),
-    ("user_side_valid_neighbor_count", "int64", False, "All valid other user-neighbor edge occurrences used by the mean."),
-    ("user_side_sampled_neighbor_count", "int64", False, "Representative neighbors used by approximate max/top-k."),
-    ("item_side_structure_mean", "float64", True, "CountSketch approximation of mean LOO normalized user-user co-occurrence over all other edge occurrences."),
-    ("item_side_structure_max", "float64", True, "Approximate maximum over deterministic bounded representative neighbors."),
-    ("item_side_structure_topk_mean", "float64", True, "Approximate top-k mean over deterministic bounded representative neighbors."),
-    ("item_side_valid_neighbor_count", "int64", False, "All valid other item-neighbor edge occurrences used by the mean."),
-    ("item_side_sampled_neighbor_count", "int64", False, "Representative neighbors used by approximate max/top-k."),
+    ("user_side_structure_mean", "float64", True, "Mean LOO degree-normalized item-item overlap estimated by MinHash over deterministic bounded neighbors."),
+    ("user_side_structure_max", "float64", True, "Maximum estimated LOO item-item overlap over deterministic bounded neighbors."),
+    ("user_side_structure_topk_mean", "float64", True, "Top-k mean estimated LOO item-item overlap over deterministic bounded neighbors."),
+    ("user_side_valid_neighbor_count", "int64", False, "All valid other item neighbors available on the user side."),
+    ("user_side_sampled_neighbor_count", "int64", False, "Deterministic bounded item neighbors actually evaluated."),
+    ("item_side_structure_mean", "float64", True, "Mean LOO degree-normalized user-user overlap estimated by MinHash over deterministic bounded neighbors."),
+    ("item_side_structure_max", "float64", True, "Maximum estimated LOO user-user overlap over deterministic bounded neighbors."),
+    ("item_side_structure_topk_mean", "float64", True, "Top-k mean estimated LOO user-user overlap over deterministic bounded neighbors."),
+    ("item_side_valid_neighbor_count", "int64", False, "All valid other user neighbors available on the item side."),
+    ("item_side_sampled_neighbor_count", "int64", False, "Deterministic bounded user neighbors actually evaluated."),
     ("bilateral_structure_min", "float64", True, "Minimum of the two side means when both are available."),
     ("bilateral_structure_max", "float64", True, "Maximum of the two side means when both are available."),
     ("bilateral_structure_mean", "float64", True, "Arithmetic mean of the two side means when both are available."),
@@ -132,6 +134,38 @@ def _write_json(path, value):
         stream.write("\n")
 
 
+def load_raw_id_mapping(path, expected_count):
+    """Load an explicit org_id/remap_id mapping without inferring identities."""
+    if not os.path.exists(path):
+        return None, "mapping file not found"
+    mapping = [None] * int(expected_count)
+    try:
+        with open(path, encoding="utf-8") as stream:
+            header = stream.readline().strip().split()
+            if "org_id" not in header or "remap_id" not in header:
+                return None, "mapping header lacks org_id/remap_id"
+            raw_column = header.index("org_id")
+            internal_column = header.index("remap_id")
+            for line_number, line in enumerate(stream, start=2):
+                values = line.rstrip("\n").split()
+                if not values:
+                    continue
+                if max(raw_column, internal_column) >= len(values):
+                    return None, "malformed mapping row %d" % line_number
+                internal_id = int(values[internal_column])
+                if internal_id < 0 or internal_id >= len(mapping):
+                    return None, "mapping ID out of range at row %d" % line_number
+                if mapping[internal_id] is not None:
+                    return None, "duplicate remap_id at row %d" % line_number
+                mapping[internal_id] = values[raw_column]
+    except (OSError, UnicodeError, ValueError) as exc:
+        return None, "mapping read failed: %s" % exc
+    missing = sum(value is None for value in mapping)
+    if missing:
+        return mapping, "partial mapping: %d IDs missing" % missing
+    return mapping, None
+
+
 def diagnostics_schema():
     return {
         "diagnostics_schema_version": SCHEMA_VERSION,
@@ -145,10 +179,11 @@ def diagnostics_schema():
             for name, dtype, nullable, description in FIELD_SPECS
         ],
         "structural_approximation": {
-            "mean": "CountSketch approximation over every valid direct neighbor edge occurrence.",
-            "max_and_topk": "CountSketch approximation over a deterministic bounded edge-ID-hash representative set.",
-            "target_edge_exclusion": "The target occurrence is removed analytically from its candidate fingerprint and neighbor aggregate.",
-            "residual_self_influence": "Signed-hash collisions can leave approximation error; no target edge is deliberately included as direct evidence.",
+            "estimator": "MinHash estimates leave-one-edge-out Jaccard overlap; observed degrees transform it to cosine-normalized co-occurrence.",
+            "mean_max_and_topk": "Computed over a deterministic bounded edge-ID-hash representative set, not all neighbor pairs.",
+            "target_edge_exclusion": "Per-hash first/second minima remove the target endpoint exactly from the candidate neighborhood; the target edge is also excluded from representatives.",
+            "degree_bias_control": "MinHash match probability is Jaccard similarity and does not grow merely because a node has high degree.",
+            "remaining_approximation": "Finite MinHash dimensions and bounded neighbor sampling introduce sampling variance; sampled-neighbor counts are exported.",
         },
     }
 
@@ -220,25 +255,91 @@ def _stable_representative_edges(group_ids, num_groups, support_limit):
     return representatives
 
 
-def _signed_hash_basis(node_count, sketch_dim, device, salt):
-    node_ids = torch.arange(int(node_count), device=device, dtype=torch.long)
-    buckets = torch.remainder(node_ids * 1103515245 + 12345 + int(salt), int(sketch_dim))
-    parity = torch.remainder(node_ids * 2654435761 + 1013904223 + int(salt), 2)
-    signs = torch.where(
-        parity == 0,
-        torch.ones(node_count, device=device, dtype=torch.float32),
-        -torch.ones(node_count, device=device, dtype=torch.float32),
+def _splitmix64(value):
+    """Small deterministic mixer used only to derive hash coefficients."""
+    mask = (1 << 64) - 1
+    value = (int(value) + 0x9E3779B97F4A7C15) & mask
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & mask
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & mask
+    return (value ^ (value >> 31)) & mask
+
+
+def _minhash_values(node_ids, dimension_start, dimension_end, salt):
+    """Deterministic injective affine hashes for the requested dimensions."""
+    coefficients = []
+    offsets = []
+    for dimension in range(int(dimension_start), int(dimension_end)):
+        base = (int(salt) << 32) + dimension
+        coefficients.append(_splitmix64(base) % (MINHASH_PRIME - 1) + 1)
+        offsets.append(_splitmix64(base ^ 0xD1B54A32D192ED03) % MINHASH_PRIME)
+    coefficients = torch.tensor(
+        coefficients, device=node_ids.device, dtype=torch.int64
     )
-    basis = torch.zeros((int(node_count), int(sketch_dim)), device=device, dtype=torch.float32)
-    basis[node_ids, buckets] = signs
-    return basis, buckets, signs
+    offsets = torch.tensor(offsets, device=node_ids.device, dtype=torch.int64)
+    values = torch.remainder(
+        node_ids.to(torch.int64).unsqueeze(1) * coefficients.unsqueeze(0)
+        + offsets.unsqueeze(0),
+        MINHASH_PRIME,
+    )
+    return values.to(torch.int32)
 
 
-class TwoHopCountSketch(object):
-    """Scalable, deterministic two-hop structural feature engine.
+def _neighbor_minhash(source_ids, group_ids, num_groups, salt):
+    """Return first and second MinHash values for every bipartite node."""
+    if not hasattr(torch.Tensor, "scatter_reduce_"):
+        raise RuntimeError(
+            "two_hop_minhash requires torch.Tensor.scatter_reduce_ "
+            "(available in the server's PyTorch 2.x runtime)"
+        )
+    device = source_ids.device
+    first = torch.full(
+        (int(num_groups), MINHASH_DIM),
+        MINHASH_PRIME,
+        device=device,
+        dtype=torch.int32,
+    )
+    second = torch.full_like(first, MINHASH_PRIME)
+    for start in range(0, MINHASH_DIM, MINHASH_BUILD_DIM_CHUNK):
+        end = min(MINHASH_DIM, start + MINHASH_BUILD_DIM_CHUNK)
+        edge_hashes = _minhash_values(source_ids, start, end, salt)
+        group_index = group_ids.to(torch.long).unsqueeze(1).expand_as(edge_hashes)
+        block_first = torch.full(
+            (int(num_groups), end - start),
+            MINHASH_PRIME,
+            device=device,
+            dtype=torch.int32,
+        )
+        block_first.scatter_reduce_(
+            0, group_index, edge_hashes, reduce="amin", include_self=True
+        )
+        is_first = edge_hashes == block_first[group_ids]
+        first_count = torch.zeros_like(block_first)
+        first_count.scatter_add_(0, group_index, is_first.to(torch.int32))
+        without_first = torch.where(
+            is_first,
+            torch.full_like(edge_hashes, MINHASH_PRIME),
+            edge_hashes,
+        )
+        block_second = torch.full_like(block_first, MINHASH_PRIME)
+        block_second.scatter_reduce_(
+            0, group_index, without_first, reduce="amin", include_self=True
+        )
+        # Duplicate coordinates or an extremely unlikely equal hash leave the
+        # first minimum present after removing one occurrence.
+        block_second = torch.where(first_count > 1, block_first, block_second)
+        first[:, start:end] = block_first
+        second[:, start:end] = block_second
+    return first, second
 
-    Sparse R is multiplied by fixed signed one-hot hash bases.  This estimates
-    degree-normalized co-occurrence without materializing R^T R or R R^T.
+
+class TwoHopMinHash(object):
+    """Bounded, degree-calibrated two-hop structural diagnostics.
+
+    Each node stores MinHash signatures of its one-hop neighbor set.  For a
+    target edge, first/second minima analytically remove the opposite endpoint
+    from the candidate signature.  Similarity to a deterministic bounded set
+    of same-type neighbors is estimated as Jaccard and transformed to the
+    cosine-normalized co-occurrence implied by the two observed degrees.
     """
 
     def __init__(self, edge_index, num_users, num_items, topk, structural_mode):
@@ -260,8 +361,8 @@ class TwoHopCountSketch(object):
         ).to(torch.float32)
         self.support_limit = max(self.topk + 1, 16)
 
-        self.enabled = structural_mode == "two_hop_countsketch"
-        if structural_mode not in ("two_hop_countsketch", "none"):
+        self.enabled = structural_mode == "two_hop_minhash"
+        if structural_mode not in ("two_hop_minhash", "none"):
             raise ValueError("Unsupported structural mode: %s" % structural_mode)
         if not self.enabled:
             return
@@ -273,64 +374,96 @@ class TwoHopCountSketch(object):
             size=(self.num_users, self.num_items),
             device=self.device,
         ).coalesce()
-        self.interaction = interaction
-
-        user_basis, self.user_bucket, self.user_sign = _signed_hash_basis(
-            self.num_users, COUNT_SKETCH_DIM, self.device, salt=17
+        # Structural overlap uses the coalesced simple graph. Edge identity and
+        # connectivity fields continue to use the original edge occurrences.
+        self.structural_edge_index = interaction.indices()
+        structural_users = self.structural_edge_index[0]
+        structural_items = self.structural_edge_index[1]
+        self.structural_user_degree = torch.bincount(
+            structural_users, minlength=self.num_users
+        ).to(torch.float32)
+        self.structural_item_degree = torch.bincount(
+            structural_items, minlength=self.num_items
+        ).to(torch.float32)
+        self.item_first, self.item_second = _neighbor_minhash(
+            structural_users,
+            structural_items,
+            self.num_items,
+            salt=17,
         )
-        item_raw = torch.sparse.mm(self.interaction.transpose(0, 1), user_basis)
-        del user_basis
-        item_basis, self.item_bucket, self.item_sign = _signed_hash_basis(
-            self.num_items, COUNT_SKETCH_DIM, self.device, salt=53
-        )
-        user_raw = torch.sparse.mm(self.interaction, item_basis)
-        del item_basis
-
-        self.item_full = item_raw / self.item_degree.clamp(min=1).sqrt().unsqueeze(1)
-        self.user_full = user_raw / self.user_degree.clamp(min=1).sqrt().unsqueeze(1)
-        del item_raw, user_raw
-
-        self.item_neighbor_sum = torch.sparse.mm(self.interaction, self.item_full)
-        self.user_neighbor_sum = torch.sparse.mm(
-            self.interaction.transpose(0, 1), self.user_full
+        self.user_first, self.user_second = _neighbor_minhash(
+            structural_items,
+            structural_users,
+            self.num_users,
+            salt=53,
         )
         self.user_representative_edges = _stable_representative_edges(
-            self.edge_index[0], self.num_users, self.support_limit
+            structural_users, self.num_users, self.support_limit
         )
         self.item_representative_edges = _stable_representative_edges(
-            self.edge_index[1], self.num_items, self.support_limit
+            structural_items, self.num_items, self.support_limit
         )
 
-    def _bounded_extrema(self, candidate, representatives, target_edge_ids,
-                         neighbor_node_row, neighbor_full, candidate_valid):
+    def _loo_signature(self, first, second, node_ids, removed_neighbor_ids, salt):
+        full = first[node_ids]
+        removed_hash = _minhash_values(
+            removed_neighbor_ids, 0, MINHASH_DIM, salt
+        )
+        return torch.where(full == removed_hash, second[node_ids], full)
+
+    def _bounded_statistics(
+        self,
+        candidate_signature,
+        candidate_degree,
+        representatives,
+        target_neighbor_ids,
+        neighbor_node_row,
+        neighbor_signatures,
+        neighbor_degree,
+        candidate_valid,
+    ):
         valid = representatives >= 0
-        valid = valid & (representatives != target_edge_ids.unsqueeze(1))
         safe_edges = representatives.clamp(min=0)
-        neighbor_ids = self.edge_index[neighbor_node_row][safe_edges]
-        neighbor_vectors = neighbor_full[neighbor_ids]
-        similarities = torch.sum(candidate.unsqueeze(1) * neighbor_vectors, dim=2)
-        similarities = similarities.clamp(min=0.0, max=1.0)
+        neighbor_ids = self.structural_edge_index[neighbor_node_row][safe_edges]
+        valid = valid & (neighbor_ids != target_neighbor_ids.unsqueeze(1))
         valid = valid & candidate_valid.unsqueeze(1)
+        neighbor_degrees = neighbor_degree[neighbor_ids]
+        valid = valid & (neighbor_degrees > 0)
+
+        signatures = neighbor_signatures[neighbor_ids]
+        jaccard = (
+            candidate_signature.unsqueeze(1) == signatures
+        ).to(torch.float32).mean(dim=2)
+        candidate_degrees = candidate_degree.unsqueeze(1).to(torch.float32)
+        intersection = (
+            jaccard * (candidate_degrees + neighbor_degrees)
+            / (1.0 + jaccard)
+        )
+        intersection = torch.minimum(
+            intersection, torch.minimum(candidate_degrees, neighbor_degrees)
+        )
+        similarities = intersection / torch.sqrt(
+            candidate_degrees.clamp(min=1.0) * neighbor_degrees.clamp(min=1.0)
+        )
+        similarities = similarities.clamp(min=0.0, max=1.0)
+
         sampled_count = valid.sum(dim=1)
+        finite_values = torch.where(valid, similarities, torch.zeros_like(similarities))
+        mean = finite_values.sum(dim=1) / sampled_count.clamp(min=1)
+        nan = torch.full_like(mean, float("nan"))
+        mean = torch.where(sampled_count > 0, mean, nan)
+
         masked = similarities.masked_fill(~valid, float("-inf"))
         maximum = masked.max(dim=1).values
-        maximum = torch.where(
-            sampled_count > 0,
-            maximum,
-            torch.full_like(maximum, float("nan")),
-        )
+        maximum = torch.where(sampled_count > 0, maximum, nan)
         k = min(self.topk, self.support_limit)
         top_values = torch.topk(masked, k=k, dim=1).values
         finite = torch.isfinite(top_values)
         top_count = finite.sum(dim=1)
         top_sum = torch.where(finite, top_values, torch.zeros_like(top_values)).sum(dim=1)
         top_mean = top_sum / top_count.clamp(min=1)
-        top_mean = torch.where(
-            top_count > 0,
-            top_mean,
-            torch.full_like(top_mean, float("nan")),
-        )
-        return maximum, top_mean, sampled_count
+        top_mean = torch.where(top_count > 0, top_mean, nan)
+        return mean, maximum, top_mean, sampled_count
 
     @_no_grad()
     def compute_chunk(self, start, end):
@@ -351,68 +484,58 @@ class TwoHopCountSketch(object):
                 "item_side_sampled_neighbor_count": zero.clone(),
             }
 
-        target_edge_ids = torch.arange(start, end, device=self.device, dtype=torch.long)
         users = self.edge_index[0, start:end]
         items = self.edge_index[1, start:end]
-        user_degree = self.user_degree[users]
-        item_degree = self.item_degree[items]
-        row_ids = torch.arange(size, device=self.device)
-
-        # Candidate item fingerprint after removing exactly this edge occurrence.
-        candidate_item_raw = self.item_full[items] * item_degree.sqrt().unsqueeze(1)
-        candidate_item_raw[row_ids, self.user_bucket[users]] -= self.user_sign[users]
-        candidate_item = candidate_item_raw / (item_degree - 1).clamp(min=1).sqrt().unsqueeze(1)
+        user_degree = self.structural_user_degree[users]
+        item_degree = self.structural_item_degree[items]
         user_side_valid = (user_degree > 1) & (item_degree > 1)
-        other_item_sum = self.item_neighbor_sum[users] - self.item_full[items]
-        user_mean = torch.sum(candidate_item * other_item_sum, dim=1) / (user_degree - 1).clamp(min=1)
-        user_mean = user_mean.clamp(min=0.0, max=1.0)
-        user_mean = torch.where(
-            user_side_valid, user_mean, torch.full_like(user_mean, float("nan"))
+        item_side_valid = user_side_valid
+
+        candidate_item = self._loo_signature(
+            self.item_first, self.item_second, items, users, salt=17
         )
-        user_reps = self.user_representative_edges[users]
-        user_max, user_topk, user_sampled = self._bounded_extrema(
-            candidate_item,
-            user_reps,
-            target_edge_ids,
+        user_mean, user_max, user_topk, user_sampled = self._bounded_statistics(
+            candidate_signature=candidate_item,
+            candidate_degree=item_degree - 1,
+            representatives=self.user_representative_edges[users],
+            target_neighbor_ids=items,
             neighbor_node_row=1,
-            neighbor_full=self.item_full,
+            neighbor_signatures=self.item_first,
+            neighbor_degree=self.structural_item_degree,
             candidate_valid=user_side_valid,
         )
+        del candidate_item
 
-        # Candidate user fingerprint after removing exactly this edge occurrence.
-        candidate_user_raw = self.user_full[users] * user_degree.sqrt().unsqueeze(1)
-        candidate_user_raw[row_ids, self.item_bucket[items]] -= self.item_sign[items]
-        candidate_user = candidate_user_raw / (user_degree - 1).clamp(min=1).sqrt().unsqueeze(1)
-        item_side_valid = (item_degree > 1) & (user_degree > 1)
-        other_user_sum = self.user_neighbor_sum[items] - self.user_full[users]
-        item_mean = torch.sum(candidate_user * other_user_sum, dim=1) / (item_degree - 1).clamp(min=1)
-        item_mean = item_mean.clamp(min=0.0, max=1.0)
-        item_mean = torch.where(
-            item_side_valid, item_mean, torch.full_like(item_mean, float("nan"))
+        candidate_user = self._loo_signature(
+            self.user_first, self.user_second, users, items, salt=53
         )
-        item_reps = self.item_representative_edges[items]
-        item_max, item_topk, item_sampled = self._bounded_extrema(
-            candidate_user,
-            item_reps,
-            target_edge_ids,
+        item_mean, item_max, item_topk, item_sampled = self._bounded_statistics(
+            candidate_signature=candidate_user,
+            candidate_degree=user_degree - 1,
+            representatives=self.item_representative_edges[items],
+            target_neighbor_ids=users,
             neighbor_node_row=0,
-            neighbor_full=self.user_full,
+            neighbor_signatures=self.user_first,
+            neighbor_degree=self.structural_user_degree,
             candidate_valid=item_side_valid,
         )
-
         result = {
             "user_side_structure_mean": user_mean,
             "user_side_structure_max": user_max,
             "user_side_structure_topk_mean": user_topk,
             "user_side_valid_neighbor_count": torch.where(
-                user_side_valid, (user_degree - 1).to(torch.int64), torch.zeros_like(users)
+                user_side_valid,
+                (user_degree - 1).to(torch.int64),
+                torch.zeros_like(users),
             ),
             "user_side_sampled_neighbor_count": user_sampled.to(torch.int64),
             "item_side_structure_mean": item_mean,
             "item_side_structure_max": item_max,
             "item_side_structure_topk_mean": item_topk,
             "item_side_valid_neighbor_count": torch.where(
-                item_side_valid, (item_degree - 1).to(torch.int64), torch.zeros_like(items)
+                item_side_valid,
+                (item_degree - 1).to(torch.int64),
+                torch.zeros_like(items),
             ),
             "item_side_sampled_neighbor_count": item_sampled.to(torch.int64),
         }
@@ -746,10 +869,14 @@ def _git_info(repo_dir):
             ["git", "-C", repo_dir, "rev-parse", "HEAD"],
             stderr=subprocess.STDOUT,
         ).decode("utf-8").strip()
-        dirty = bool(subprocess.check_output(
-            ["git", "-C", repo_dir, "status", "--porcelain"],
-            stderr=subprocess.STDOUT,
-        ).decode("utf-8").strip())
+        # Compare tracked content only. Run logs and diagnostics parts are
+        # intentionally untracked artifacts and must not create a false dirty
+        # provenance flag merely because they were written inside the repo.
+        dirty = subprocess.call(
+            ["git", "-C", repo_dir, "diff", "--quiet", "HEAD", "--"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ) != 0
         return commit, dirty
     except (OSError, subprocess.CalledProcessError):
         return None, None
@@ -762,6 +889,11 @@ class EdgeDiagnosticsExporter(object):
         self.model_config = model_config
         self.output_dir = os.path.abspath(output_dir)
         self.repo_dir = repo_dir
+        self.code_commit_hash, self.code_tracked_worktree_dirty = _git_info(repo_dir)
+        self.user_raw_mapping = None
+        self.item_raw_mapping = None
+        self.user_raw_mapping_error = None
+        self.item_raw_mapping_error = None
         os.makedirs(self.output_dir, exist_ok=True)
         logs_dir = os.path.join(self.output_dir, "logs")
         os.makedirs(logs_dir, exist_ok=True)
@@ -787,12 +919,22 @@ class EdgeDiagnosticsExporter(object):
         retained = retained_mask[start:end].detach().cpu().to(torch.bool)
         score = normalized_score[start:end].detach().cpu().to(torch.float64)
         size = int(end - start)
+        user_ids = users.tolist()
+        item_ids = items.tolist()
+        user_raw = (
+            [self.user_raw_mapping[value] for value in user_ids]
+            if self.user_raw_mapping is not None else [None] * size
+        )
+        item_raw = (
+            [self.item_raw_mapping[value] for value in item_ids]
+            if self.item_raw_mapping is not None else [None] * size
+        )
         columns = {
             "edge_id": edge_ids,
             "user_id_internal": users,
             "item_id_internal": items,
-            "user_id_raw": users.clone(),
-            "item_id_raw": items.clone(),
+            "user_id_raw": user_raw,
+            "item_id_raw": item_raw,
             "edge_position_in_training_graph": edge_ids.clone(),
             "is_original_observed_edge": [None] * size,
             "synthetic_is_noisy": [None] * size,
@@ -885,7 +1027,18 @@ class EdgeDiagnosticsExporter(object):
             raise ValueError("retained mask does not match the current post-threshold score tensor")
 
         self.logger.info("Starting edge diagnostics export for %d edges", edge_count)
-        engine = TwoHopCountSketch(
+        dataset_dir = os.path.join(self.repo_dir, "data", self.args.dataset)
+        self.user_raw_mapping, self.user_raw_mapping_error = load_raw_id_mapping(
+            os.path.join(dataset_dir, "user_list.txt"), num_users
+        )
+        self.item_raw_mapping, self.item_raw_mapping_error = load_raw_id_mapping(
+            os.path.join(dataset_dir, "item_list.txt"), num_items
+        )
+        if self.user_raw_mapping_error:
+            self.logger.warning("User raw-ID mapping: %s", self.user_raw_mapping_error)
+        if self.item_raw_mapping_error:
+            self.logger.warning("Item raw-ID mapping: %s", self.item_raw_mapping_error)
+        engine = TwoHopMinHash(
             edge_index=edge_index,
             num_users=num_users,
             num_items=num_items,
@@ -966,7 +1119,6 @@ class EdgeDiagnosticsExporter(object):
 
         retained_count = int(retained_mask.to(torch.int64).sum().item())
         removed_count = edge_count - retained_count
-        commit_hash, worktree_dirty = _git_info(self.repo_dir)
         metadata_thresholds = dict(
             (name, value if isinstance(value, (int, float)) and math.isfinite(value) else None)
             for name, value in thresholds.items()
@@ -974,7 +1126,8 @@ class EdgeDiagnosticsExporter(object):
         metadata = {
             "dataset": self.args.dataset,
             "seed_argument": self.args.seed,
-            "seed_is_applied_by_current_nrgcf_code": False,
+            "seed_is_applied_by_current_nrgcf_code": True,
+            "seed_reproducibility_scope": "Python, NumPy, torch CPU, and all visible CUDA generators are seeded before data/model construction; sparse CUDA kernels may still have platform-specific nondeterminism.",
             "requested_noise_ratio": self.args.requested_noise_ratio,
             "actual_noise_ratio": None,
             "number_of_users": int(num_users),
@@ -998,13 +1151,14 @@ class EdgeDiagnosticsExporter(object):
             "actual_format": writer.actual_format,
             "format_fallback_reason": writer.fallback_reason,
             "structural_mode": self.args.edge_diagnostics_structural_mode,
-            "structural_sketch_dim": COUNT_SKETCH_DIM,
+            "structural_signature_dim": MINHASH_DIM if engine.enabled else None,
             "topk": topk,
             "representative_neighbor_limit": engine.support_limit,
             "chunk_size": chunk_size,
             "minimum_degree_for_risk_flag": min_degree,
-            "code_commit_hash": commit_hash,
-            "code_worktree_dirty": worktree_dirty,
+            "code_commit_hash": self.code_commit_hash,
+            "code_worktree_dirty": self.code_tracked_worktree_dirty,
+            "code_worktree_dirty_semantics": "Tracked files compared with HEAD; untracked run artifacts are intentionally ignored.",
             "export_timestamp_utc": datetime.utcnow().isoformat() + "Z",
             "paper_code_difference_summary": [
                 "Current loop starts at epoch 1, so the epoch==0 momentum initialization branch is not used.",
@@ -1019,13 +1173,19 @@ class EdgeDiagnosticsExporter(object):
                 "historical_or_momentum_loss": "Exact raw model.momentum_loss immediately before current min-max normalization.",
                 "filter_decision": "Exact current local post-threshold tensor and mask at epoch 15.",
                 "degree_and_connectivity": "Original observed training edge multiset before filtering.",
-                "structural_features": "Original observed training edge multiset before filtering; no validation or test edges.",
+                "structural_features": "Coalesced simple graph made only from pre-filter training edges; no validation or test edges.",
             },
             "edge_identity": {
                 "definition": "edge_id equals original dataset.train_edge_index column position.",
                 "duplicates_deduplicated_for_identity": False,
-                "duplicate_semantics": "Duplicate user-item occurrences receive distinct edge IDs. Sparse structural multiplication coalesces coordinates by summing multiplicity.",
-                "raw_id_mapping": "No remapping: raw numeric IDs are used as internal IDs.",
+                "duplicate_semantics": "Duplicate user-item occurrences receive distinct edge IDs; structural overlap uses a coalesced simple graph and therefore gives duplicate coordinates the same graph context.",
+                "raw_id_mapping": "Original IDs are loaded from user_list.txt/item_list.txt by explicit remap_id lookup; unavailable entries are null.",
+            },
+            "raw_id_mapping": {
+                "user_mapping_available": self.user_raw_mapping is not None,
+                "item_mapping_available": self.item_raw_mapping is not None,
+                "user_mapping_note": self.user_raw_mapping_error,
+                "item_mapping_note": self.item_raw_mapping_error,
             },
             "structural_feature_notes": diagnostics_schema()["structural_approximation"],
             "raw_edge_loss_at_filter_epoch_available": False,
