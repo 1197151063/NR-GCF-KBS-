@@ -29,17 +29,12 @@ export RELIABILITY_MOMENTUM_Q="${RELIABILITY_MOMENTUM_Q:-0.80}"
 export RELIABILITY_STRUCTURE_Q="${RELIABILITY_STRUCTURE_Q:-0.20}"
 export RELIABILITY_STRUCTURE_WEIGHT="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 export RELIABILITY_MIN_WEIGHT="${RELIABILITY_MIN_WEIGHT:-0.10}"
-export REPRESENTATION_MODULATION_LAMBDA="${REPRESENTATION_MODULATION_LAMBDA:-1}"
+export REPRESENTATION_MODULATION_LAMBDA=1
 
-modulation_modes="${MODULATION_MODES:-none paper_stage_two reliability_weighted_stage_two}"
+modulation_modes="${MODULATION_MODES:-none original_stage_two reliability_weighted_stage_two}"
 for modulation_mode in $modulation_modes; do
-  if [[ "$modulation_mode" == "none" || "$modulation_mode" == "legacy_always" ]]; then
-    export REPRESENTATION_MODULATION_RAMP_EPOCHS=0
-  else
-    # The same transition is used for both stage-two variants so the only
-    # difference between them is the reliability-weighted scale estimator.
-    export REPRESENTATION_MODULATION_RAMP_EPOCHS="${STAGE_TWO_RAMP_EPOCHS:-5}"
-  fi
+  # Exact original forward path: no lambda blending and no transition ramp.
+  export REPRESENTATION_MODULATION_RAMP_EPOCHS=0
   export REPRESENTATION_MODULATION_MODE="$modulation_mode"
   echo "Starting representation modulation arm: $modulation_mode"
   bash "$script_dir/run_edge_diagnostics_grid.sh"

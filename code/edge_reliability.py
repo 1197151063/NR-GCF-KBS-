@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v5"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v6"
 
 
 def _require_torch():
@@ -621,7 +621,7 @@ def write_reliability_summary(
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
-            "representation_modulation": "Configured separately: paper_stage_two starts cross-type scale modulation only after filtering; reliability_weighted_stage_two estimates its frozen global scales from retained-edge reliability.",
+            "representation_modulation": "Configured separately: original_stage_two starts the released direct cross_norm only after filtering; reliability_weighted_stage_two changes only its frozen RMS estimator to use retained-edge reliability.",
         },
         "feature_definitions": {
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
@@ -736,11 +736,12 @@ def write_training_summary(
         "representation_modulation": {
             "mode": str(representation_modulation_mode),
             "ramp_epochs": int(representation_modulation_ramp_epochs),
-            "lambda": float(representation_modulation_lambda),
+            "lambda": None,
+            "lambda_note": "Ignored by NRGCF direct cross_norm modes; retained only as a legacy CLI/config field.",
             "stage_one": (
                 "ordinary LightGCN propagation without modulation"
                 if representation_modulation_mode in (
-                    "none", "paper_stage_two",
+                    "none", "original_stage_two", "paper_stage_two",
                     "reliability_weighted_stage_two"
                 ) else "legacy cross modulation from epoch one"
             ),
@@ -756,8 +757,8 @@ def write_training_summary(
             ),
             "scale_definition": (
                 "sqrt(weighted_mean(node_embedding_squared_l2_norm) + 1e-6); "
-                "uncapped to preserve the numerically active original code "
-                "operation while correcting its stage timing"
+                "uncapped and applied directly after every propagation layer, "
+                "matching the released cross_norm implementation"
             ),
             "trace": representation_modulation_trace,
         },

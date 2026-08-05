@@ -34,21 +34,23 @@ def parse_args():
     parser.add_argument('--tau', type=float, default=0.1,
                         help="the temperature for softmax in loss function")  # 0.1
     parser.add_argument('--lambda_', type=float, default=1,
-                        help="the lambda for cross norm in loss function")  # 0.5
+                        help="legacy compatibility parameter; NRGCF stage-two direct cross_norm does not use lambda")
     parser.add_argument(
         '--representation-modulation-mode',
         type=str,
-        default='paper_stage_two',
+        default='original_stage_two',
         choices=[
             'none',
             'legacy_always',
+            'original_stage_two',
             'paper_stage_two',
             'reliability_weighted_stage_two',
         ],
         help=(
             'none disables modulation; legacy_always preserves the previous '
-            'from-epoch-one code path; paper_stage_two activates the released '
-            'code cross-type RMS modulation only after filtering; '
+            'from-epoch-one code path; original_stage_two activates the '
+            'released direct cross_norm operation only after filtering; '
+            'paper_stage_two is a backward-compatible alias; '
             'reliability_weighted_stage_two additionally estimates the '
             'stage-two scales from frozen retained-edge reliability'
         ),

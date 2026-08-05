@@ -125,8 +125,6 @@ if (world.args.export_edge_diagnostics
     )
 if world.args.representation_modulation_ramp_epochs < 0:
     raise ValueError('--representation-modulation-ramp-epochs cannot be negative')
-if not 0.0 <= float(world.lambda_) <= 1.0:
-    raise ValueError('--lambda_ must be within [0, 1]')
 if (world.args.representation_modulation_mode
         == 'reliability_weighted_stage_two'
         and world.args.edge_filter_mode != 'hard_structure_momentum'):
@@ -245,7 +243,8 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 }
                 current_policy['representation_modulation'] = {
                     'mode': world.args.representation_modulation_mode,
-                    'lambda': float(world.lambda_),
+                    'lambda': None,
+                    'lambda_note': 'ignored by direct NRGCF cross_norm',
                     'ramp_epochs': int(
                         world.args.representation_modulation_ramp_epochs
                     ),
@@ -339,10 +338,11 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 'pre-filter observed edges.'
             )
             model.activate_stage_two_modulation(filtering_epoch=epoch)
-            if world.args.representation_modulation_mode == 'paper_stage_two':
+            if world.args.representation_modulation_mode in (
+                    'original_stage_two', 'paper_stage_two'):
                 print_log(
-                    'Paper-consistent stage two armed: unweighted cross-type '
-                    'modulation begins with the next optimization epoch.'
+                    'Original-code stage two armed: direct unweighted '
+                    'cross_norm begins with the next optimization epoch.'
                 )
             del retained_edge_mask
             del filtered_train_edge_index
@@ -381,7 +381,8 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 policy['warmup_epoch_count'] = active_filtering_epoch
             policy['representation_modulation'] = {
                 'mode': world.args.representation_modulation_mode,
-                'lambda': float(world.lambda_),
+                'lambda': None,
+                'lambda_note': 'ignored by direct NRGCF cross_norm',
                 'ramp_epochs': int(
                     world.args.representation_modulation_ramp_epochs
                 ),
@@ -462,11 +463,12 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 item_weight=item_modulation_weight,
             )
             if world.args.representation_modulation_mode in (
-                    'paper_stage_two', 'reliability_weighted_stage_two'):
+                    'original_stage_two', 'paper_stage_two',
+                    'reliability_weighted_stage_two'):
                 print_log(
                     'Representation modulation stage armed: mode='
                     f'{world.args.representation_modulation_mode}, '
-                    f'lambda={world.lambda_}, ramp_epochs='
+                    'operator=direct_cross_norm, ramp_epochs='
                     f'{world.args.representation_modulation_ramp_epochs}; '
                     'activation begins with the next optimization epoch.'
                 )

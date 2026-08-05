@@ -223,10 +223,13 @@ class NRGCF(RecModel):
         self.edge_index = gcn_norm(self.edge_index)
         self.lambda_ = config['lambda']
         self.representation_modulation_mode = config.get(
-            'representation_modulation_mode', 'paper_stage_two'
+            'representation_modulation_mode', 'original_stage_two'
         )
+        if self.representation_modulation_mode == 'paper_stage_two':
+            # Backward-compatible alias used by the first stage-two pilot.
+            self.representation_modulation_mode = 'original_stage_two'
         valid_modulation_modes = {
-            'none', 'legacy_always', 'paper_stage_two',
+            'none', 'legacy_always', 'original_stage_two',
             'reliability_weighted_stage_two',
         }
         if self.representation_modulation_mode not in valid_modulation_modes:
@@ -347,8 +350,8 @@ class NRGCF(RecModel):
         # The released NR-GCF code uses this uncapped RMS.  The paper prints
         # min(mean_squared_norm, 1), which becomes an identity divisor whenever
         # the statistic is above one under the released std=1 initialization.
-        # We align the stage timing with the paper but preserve the executable,
-        # numerically active scale operation.
+        # We preserve the executable, numerically active scale operation and
+        # move it to the post-filter stage requested by this project.
         squared_norm = embeddings.pow(2).sum(dim=1)
         denominator = weight.sum().clamp_min(1e-12)
         mean_squared_norm = (squared_norm * weight).sum() / denominator
@@ -392,9 +395,7 @@ class NRGCF(RecModel):
         return {
             'active': bool(self.modulation_active),
             'progress': float(self.modulation_progress),
-            'effective_strength': float(
-                self.lambda_ * self.modulation_progress
-            ),
+            'effective_strength': float(self.modulation_progress),
             'user_block_rms': user_rms,
             'item_block_rms': item_rms,
             'user_embedding_divisor': item_rms,
@@ -411,10 +412,17 @@ class NRGCF(RecModel):
         out = [x]
         for i in range(self.config['K']):
             x = self.propagate(edge_index, x=x)
-            modulation_strength = self.lambda_ * self.modulation_progress
+            modulation_strength = self.modulation_progress
             if modulation_strength != 0.0:
                 x_c = self.cross_norm(x)
-                x = modulation_strength * x_c + (1 - modulation_strength) * x
+                if modulation_strength == 1.0:
+                    # Exact released implementation requested by the project:
+                    # propagate -> direct cross_norm -> layer aggregation.
+                    x = x_c
+                else:
+                    # Optional transition only; recommended experiments use
+                    # ramp_epochs=0 and therefore never enter this branch.
+                    x = modulation_strength * x_c + (1 - modulation_strength) * x
             out.append(x)
         out = torch.stack(out, dim=1)
         out = out.mean(dim=1)

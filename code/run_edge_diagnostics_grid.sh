@@ -79,13 +79,15 @@ Optional variables:
                           hard_structure_momentum
                           (default: current)
   REPRESENTATION_MODULATION_MODE
-                          none, legacy_always, paper_stage_two, or
+                          none, legacy_always, original_stage_two,
+                          paper_stage_two (alias), or
                           reliability_weighted_stage_two
-                          (default: paper_stage_two)
+                          (default: original_stage_two)
   REPRESENTATION_MODULATION_RAMP_EPOCHS
                           post-filter linear transition length (default: 0)
   REPRESENTATION_MODULATION_LAMBDA
-                          cross-type modulation strength in [0,1] (default: 1)
+                          legacy recorded config in [0,1]; direct NRGCF
+                          cross_norm modes ignore it (default: 1)
   SUMMARY_ONLY            1: write compact reliability JSON and no per-edge
                           CSV/Parquet (default: 0)
   KEEP_EDGE_LABELS        retain the temporary synthetic-label CSV (default: 1)
@@ -149,7 +151,7 @@ reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
 reliability_filter_epoch="${RELIABILITY_FILTER_EPOCH:-15}"
 reliability_momentum_decay="${RELIABILITY_MOMENTUM_DECAY:-0.90}"
-representation_modulation_mode="${REPRESENTATION_MODULATION_MODE:-paper_stage_two}"
+representation_modulation_mode="${REPRESENTATION_MODULATION_MODE:-original_stage_two}"
 representation_modulation_ramp_epochs="${REPRESENTATION_MODULATION_RAMP_EPOCHS:-0}"
 representation_modulation_lambda="${REPRESENTATION_MODULATION_LAMBDA:-1}"
 
@@ -176,6 +178,7 @@ if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
 fi
 if [[ "$representation_modulation_mode" != "none" && \
       "$representation_modulation_mode" != "legacy_always" && \
+      "$representation_modulation_mode" != "original_stage_two" && \
       "$representation_modulation_mode" != "paper_stage_two" && \
       "$representation_modulation_mode" != "reliability_weighted_stage_two" ]]; then
   echo "Unsupported REPRESENTATION_MODULATION_MODE: $representation_modulation_mode" >&2
