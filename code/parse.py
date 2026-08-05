@@ -47,8 +47,8 @@ def parse_args():
         ],
         help=(
             'none disables modulation; legacy_always preserves the previous '
-            'from-epoch-one code path; paper_stage_two activates cross-type '
-            'scale modulation only after filtering; '
+            'from-epoch-one code path; paper_stage_two activates the released '
+            'code cross-type RMS modulation only after filtering; '
             'reliability_weighted_stage_two additionally estimates the '
             'stage-two scales from frozen retained-edge reliability'
         ),

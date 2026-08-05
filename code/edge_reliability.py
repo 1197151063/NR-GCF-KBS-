@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v4"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v5"
 
 
 def _require_torch():
@@ -717,7 +717,8 @@ def write_training_summary(
         output_dir, mode, requested_epochs, epochs_completed, best_epoch,
         best_recall, best_ndcg, final_loss, propagation_edge_count,
         bpr_positive_edge_count, representation_modulation_mode,
-        representation_modulation_ramp_epochs, representation_modulation_lambda):
+        representation_modulation_ramp_epochs, representation_modulation_lambda,
+        representation_modulation_trace):
     """Write the small outcome needed to compare the completed 100-epoch runs."""
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -753,6 +754,12 @@ def write_training_summary(
                     else "unweighted cross-type RMS"
                 )
             ),
+            "scale_definition": (
+                "sqrt(weighted_mean(node_embedding_squared_l2_norm) + 1e-6); "
+                "uncapped to preserve the numerically active original code "
+                "operation while correcting its stage timing"
+            ),
+            "trace": representation_modulation_trace,
         },
     }
     os.makedirs(output_dir, exist_ok=True)

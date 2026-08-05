@@ -181,6 +181,7 @@ max_score = 0.
 best_recall = 0.
 best_epoch = 0
 best_ndcg = 0.
+representation_modulation_trace = []
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
@@ -252,6 +253,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                         world.args.representation_modulation_mode
                         == 'legacy_always'
                     ),
+                    'scale_definition': 'uncapped_cross_type_rms',
                 }
                 repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 write_reliability_summary(
@@ -387,6 +389,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     world.args.representation_modulation_mode
                     == 'legacy_always'
                 ),
+                'scale_definition': 'uncapped_cross_type_rms',
             }
             repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             write_reliability_summary(
@@ -487,6 +490,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
         [20], model, evaluation_train_edge_index,
         test_edge_index, num_users
     )
+    modulation_snapshot = model.modulation_snapshot()
+    modulation_snapshot['epoch'] = int(epoch)
+    representation_modulation_trace.append(modulation_snapshot)
     flag,best,patience = utils.early_stopping(recall[20],ndcg[20],best,patience,model)
     if patience == 0:
         best_epoch = epoch
@@ -518,6 +524,7 @@ if (world.args.edge_filter_mode != 'current'
             world.args.representation_modulation_ramp_epochs
         ),
         representation_modulation_lambda=world.lambda_,
+        representation_modulation_trace=representation_modulation_trace,
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

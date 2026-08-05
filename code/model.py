@@ -244,6 +244,8 @@ class NRGCF(RecModel):
             self.representation_modulation_mode == 'legacy_always'
         )
         self.modulation_progress = 1.0 if self.modulation_active else 0.0
+        self.last_user_block_rms = None
+        self.last_item_block_rms = None
         self.register_buffer(
             'user_modulation_weight', torch.ones(num_users, dtype=torch.float32)
         )
@@ -340,29 +342,49 @@ class NRGCF(RecModel):
                 1.0, float(elapsed) / float(self.modulation_ramp_epochs)
             )
 
-    def _weighted_rms(self, embeddings, weight, cap_at_one):
+    def _weighted_rms(self, embeddings, weight):
+        # The released NR-GCF code uses this uncapped RMS.  The paper prints
+        # min(mean_squared_norm, 1), which becomes an identity divisor whenever
+        # the statistic is above one under the released std=1 initialization.
+        # We align the stage timing with the paper but preserve the executable,
+        # numerically active scale operation.
         squared_norm = embeddings.pow(2).sum(dim=1)
         denominator = weight.sum().clamp_min(1e-12)
         mean_squared_norm = (squared_norm * weight).sum() / denominator
-        if cap_at_one:
-            # Eq. 10 in the paper caps the cross-type statistic at one.  The
-            # explicit legacy mode skips this branch to reproduce old code.
-            mean_squared_norm = torch.clamp(mean_squared_norm, max=1.0)
         return (mean_squared_norm + 1e-6).sqrt()
 
     def cross_norm(self,x):
         users,items = torch.split(x,[self.num_users,self.num_items])
-        cap_at_one = self.representation_modulation_mode != 'legacy_always'
-        users_norm = self._weighted_rms(
-            users, self.user_modulation_weight, cap_at_one
-        )
-        items_norm = self._weighted_rms(
-            items, self.item_modulation_weight, cap_at_one
-        )
+        users_norm = self._weighted_rms(users, self.user_modulation_weight)
+        items_norm = self._weighted_rms(items, self.item_modulation_weight)
+        self.last_user_block_rms = users_norm.detach()
+        self.last_item_block_rms = items_norm.detach()
         users = users / (items_norm)
         items = items / (users_norm)
         x = torch.cat([users,items])
         return x
+
+    @torch.no_grad()
+    def modulation_snapshot(self):
+        """Return compact evidence of whether modulation is numerically active."""
+        def scalar_or_none(value):
+            if value is None:
+                return None
+            return float(value.detach().cpu().item())
+
+        user_rms = scalar_or_none(self.last_user_block_rms)
+        item_rms = scalar_or_none(self.last_item_block_rms)
+        return {
+            'active': bool(self.modulation_active),
+            'progress': float(self.modulation_progress),
+            'effective_strength': float(
+                self.lambda_ * self.modulation_progress
+            ),
+            'user_block_rms': user_rms,
+            'item_block_rms': item_rms,
+            'user_embedding_divisor': item_rms,
+            'item_embedding_divisor': user_rms,
+        }
         
     def forward(self,edge_index):
         user_emb = self.user_embedding.weight
