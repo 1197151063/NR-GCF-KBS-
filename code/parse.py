@@ -35,6 +35,33 @@ def parse_args():
                         help="the temperature for softmax in loss function")  # 0.1
     parser.add_argument('--lambda_', type=float, default=1,
                         help="the lambda for cross norm in loss function")  # 0.5
+    parser.add_argument(
+        '--representation-modulation-mode',
+        type=str,
+        default='paper_stage_two',
+        choices=[
+            'none',
+            'legacy_always',
+            'paper_stage_two',
+            'reliability_weighted_stage_two',
+        ],
+        help=(
+            'none disables modulation; legacy_always preserves the previous '
+            'from-epoch-one code path; paper_stage_two activates cross-type '
+            'scale modulation only after filtering; '
+            'reliability_weighted_stage_two additionally estimates the '
+            'stage-two scales from frozen retained-edge reliability'
+        ),
+    )
+    parser.add_argument(
+        '--representation-modulation-ramp-epochs',
+        type=int,
+        default=0,
+        help=(
+            'number of post-filter epochs used to linearly introduce '
+            'stage-two modulation; 0 is the exact hard stage transition'
+        ),
+    )
 
     parser.add_argument('--export-edge-diagnostics', action='store_true',
                         help='export side-channel per-edge diagnostics at the current filtering point')

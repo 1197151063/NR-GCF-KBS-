@@ -222,6 +222,34 @@ class NRGCF(RecModel):
         self.edge_index = self.get_sparse_graph(edge_index, use_value=False)
         self.edge_index = gcn_norm(self.edge_index)
         self.lambda_ = config['lambda']
+        self.representation_modulation_mode = config.get(
+            'representation_modulation_mode', 'paper_stage_two'
+        )
+        valid_modulation_modes = {
+            'none', 'legacy_always', 'paper_stage_two',
+            'reliability_weighted_stage_two',
+        }
+        if self.representation_modulation_mode not in valid_modulation_modes:
+            raise ValueError(
+                'Unsupported representation modulation mode: '
+                + str(self.representation_modulation_mode)
+            )
+        self.modulation_ramp_epochs = int(
+            config.get('representation_modulation_ramp_epochs', 0)
+        )
+        if self.modulation_ramp_epochs < 0:
+            raise ValueError('representation modulation ramp cannot be negative')
+        self.modulation_filtering_epoch = None
+        self.modulation_active = (
+            self.representation_modulation_mode == 'legacy_always'
+        )
+        self.modulation_progress = 1.0 if self.modulation_active else 0.0
+        self.register_buffer(
+            'user_modulation_weight', torch.ones(num_users, dtype=torch.float32)
+        )
+        self.register_buffer(
+            'item_modulation_weight', torch.ones(num_items, dtype=torch.float32)
+        )
         self.momentum_loss = torch.zeros(edge_index.size(1)).to(device)
         self.active_edge_count = int(edge_index.size(1))
 
@@ -253,10 +281,84 @@ class NRGCF(RecModel):
         self.active_edge_count = int(edge_index.size(1))
 
     
+    @torch.no_grad()
+    def activate_stage_two_modulation(
+            self, filtering_epoch, user_weight=None, item_weight=None):
+        """Activate the paper's post-filter modulation stage.
+
+        Reliability weights are frozen diagnostics computed without labels.
+        They affect only the global cross-type scale estimator, never BPR or
+        message-passing edge weights.
+        """
+        if self.representation_modulation_mode in ('none', 'legacy_always'):
+            return
+        weighted = (
+            self.representation_modulation_mode
+            == 'reliability_weighted_stage_two'
+        )
+        if weighted and (user_weight is None or item_weight is None):
+            raise ValueError(
+                'Reliability-weighted modulation requires user/item weights'
+            )
+        if not weighted:
+            user_weight = torch.ones_like(self.user_modulation_weight)
+            item_weight = torch.ones_like(self.item_modulation_weight)
+        for name, value, target in (
+                ('user_weight', user_weight, self.user_modulation_weight),
+                ('item_weight', item_weight, self.item_modulation_weight)):
+            value = value.detach().to(device=target.device, dtype=target.dtype)
+            if value.shape != target.shape:
+                raise ValueError(
+                    '%s must have shape %s' % (name, tuple(target.shape))
+                )
+            if not bool(torch.isfinite(value).all()) or bool((value < 0).any()):
+                raise ValueError('%s must be finite and non-negative' % name)
+            if float(value.sum().item()) <= 0.0:
+                raise ValueError('%s must contain positive mass' % name)
+            target.copy_(value)
+        self.modulation_filtering_epoch = int(filtering_epoch)
+        self.modulation_active = True
+        # Stage two starts with the next optimization epoch.  This avoids
+        # evaluating a newly switched operator before it has received an update.
+        self.modulation_progress = 0.0
+
+    @torch.no_grad()
+    def set_training_epoch(self, epoch):
+        """Update only the deterministic stage-two interpolation coefficient."""
+        if not self.modulation_active:
+            return
+        if self.representation_modulation_mode == 'legacy_always':
+            self.modulation_progress = 1.0
+            return
+        elapsed = int(epoch) - int(self.modulation_filtering_epoch)
+        if elapsed <= 0:
+            self.modulation_progress = 0.0
+        elif self.modulation_ramp_epochs == 0:
+            self.modulation_progress = 1.0
+        else:
+            self.modulation_progress = min(
+                1.0, float(elapsed) / float(self.modulation_ramp_epochs)
+            )
+
+    def _weighted_rms(self, embeddings, weight, cap_at_one):
+        squared_norm = embeddings.pow(2).sum(dim=1)
+        denominator = weight.sum().clamp_min(1e-12)
+        mean_squared_norm = (squared_norm * weight).sum() / denominator
+        if cap_at_one:
+            # Eq. 10 in the paper caps the cross-type statistic at one.  The
+            # explicit legacy mode skips this branch to reproduce old code.
+            mean_squared_norm = torch.clamp(mean_squared_norm, max=1.0)
+        return (mean_squared_norm + 1e-6).sqrt()
+
     def cross_norm(self,x):
         users,items = torch.split(x,[self.num_users,self.num_items])
-        users_norm = (1e-6 + users.pow(2).sum(dim=1).mean()).sqrt()
-        items_norm = (1e-6 + items.pow(2).sum(dim=1).mean()).sqrt()
+        cap_at_one = self.representation_modulation_mode != 'legacy_always'
+        users_norm = self._weighted_rms(
+            users, self.user_modulation_weight, cap_at_one
+        )
+        items_norm = self._weighted_rms(
+            items, self.item_modulation_weight, cap_at_one
+        )
         users = users / (items_norm)
         items = items / (users_norm)
         x = torch.cat([users,items])
@@ -269,8 +371,10 @@ class NRGCF(RecModel):
         out = [x]
         for i in range(self.config['K']):
             x = self.propagate(edge_index, x=x)
-            x_c = self.cross_norm(x)
-            x = self.lambda_ * x_c + (1 - self.lambda_) * x
+            modulation_strength = self.lambda_ * self.modulation_progress
+            if modulation_strength != 0.0:
+                x_c = self.cross_norm(x)
+                x = modulation_strength * x_c + (1 - modulation_strength) * x
             out.append(x)
         out = torch.stack(out, dim=1)
         out = out.mean(dim=1)

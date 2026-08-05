@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v3"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v4"
 
 
 def _require_torch():
@@ -284,6 +284,47 @@ def _top_risk_retained_mask(risk, target_remove_count):
     return retained
 
 
+def node_confidence_from_edge_reliability(
+        edge_index_cpu, reliability, retained_mask, num_users, num_items):
+    """Aggregate frozen retained-edge confidence into deterministic nodes.
+
+    Missing edge reliability is treated as neutral confidence one.  Nodes with
+    no retained incident edge receive zero and therefore cannot determine the
+    reliability-weighted global scale.  No labels, embeddings, or future epoch
+    information are used.
+    """
+    users = edge_index_cpu[0].numpy()
+    items = edge_index_cpu[1].numpy()
+    reliability = np.asarray(reliability, dtype=np.float64)
+    retained = np.asarray(retained_mask, dtype=bool)
+    if reliability.size != users.size or retained.size != users.size:
+        raise ValueError('edge reliability identity does not match edge_index')
+    confidence = np.where(np.isfinite(reliability), reliability, 1.0)
+    confidence = np.clip(confidence, 0.0, 1.0)
+    active_confidence = confidence[retained]
+    active_users = users[retained]
+    active_items = items[retained]
+    user_count = np.bincount(active_users, minlength=int(num_users))
+    item_count = np.bincount(active_items, minlength=int(num_items))
+    user_sum = np.bincount(
+        active_users, weights=active_confidence, minlength=int(num_users)
+    )
+    item_sum = np.bincount(
+        active_items, weights=active_confidence, minlength=int(num_items)
+    )
+    user_confidence = np.zeros(int(num_users), dtype=np.float32)
+    item_confidence = np.zeros(int(num_items), dtype=np.float32)
+    user_valid = user_count > 0
+    item_valid = item_count > 0
+    user_confidence[user_valid] = (
+        user_sum[user_valid] / user_count[user_valid]
+    ).astype(np.float32)
+    item_confidence[item_valid] = (
+        item_sum[item_valid] / item_count[item_valid]
+    ).astype(np.float32)
+    return user_confidence, item_confidence
+
+
 def _gated_soft_risk(momentum_rank, structure_rank,
                      momentum_quantile, structure_quantile):
     """Continuous risk restricted to the hard-consensus tail quadrant."""
@@ -436,6 +477,16 @@ def build_reliability_policy(
         # unscorable, and long-tail-protected edges keep unit propagation weight.
         propagation_weight[~scorable | protected] = 1.0
 
+    user_node_confidence, item_node_confidence = (
+        node_confidence_from_edge_reliability(
+            edge_index_cpu=edge_index_cpu,
+            reliability=reliability,
+            retained_mask=retained,
+            num_users=num_users,
+            num_items=num_items,
+        )
+    )
+
     decision = {
         "mode": mode,
         "frozen_at_filter_epoch": True,
@@ -486,6 +537,8 @@ def build_reliability_policy(
         "structure_rank": structure_rank,
         "reliability": reliability,
         "fused_risk": fused_risk,
+        "user_node_confidence": user_node_confidence,
+        "item_node_confidence": item_node_confidence,
         "gated_soft_risk": gated_risk,
         "protected": protected,
         "consensus_candidate": consensus_candidate,
@@ -552,6 +605,7 @@ def write_reliability_summary(
             policy["adaptive_budget_count_without_connectivity_constraint"]
         ),
         "momentum_semantics": policy.get("momentum_semantics"),
+        "representation_modulation": policy.get("representation_modulation"),
         "thresholds": {
             "momentum_high": policy["momentum_threshold"],
             "available_side_structure_low": policy["structure_threshold"],
@@ -567,13 +621,14 @@ def write_reliability_summary(
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
-            "representation_modulation": "Existing NR-GCF cross_norm path is unchanged; no new stage-two norm is added.",
+            "representation_modulation": "Configured separately: paper_stage_two starts cross-type scale modulation only after filtering; reliability_weighted_stage_two estimates its frozen global scales from retained-edge reliability.",
         },
         "feature_definitions": {
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
             "reliability": "structure_weight * percentile_rank(structure) + (1-structure_weight) * (1-percentile_rank(momentum_signal)).",
             "fused_risk": "structure_weight * (1-percentile_rank(structure)) + (1-structure_weight) * percentile_rank(momentum).",
             "gated_soft_risk": "sqrt(clip((momentum_rank-q_m)/(1-q_m),0,1) * clip((q_s-structure_rank)/q_s,0,1)); exactly zero outside the consensus tail.",
+            "node_confidence": "Mean frozen reliability of retained incident edges. Missing retained-edge reliability is neutral one; nodes without retained edges receive zero weight.",
             "protection": "user_degree_after_if_removed < min_degree OR item_degree_after_if_removed < min_degree.",
             "label_usage": "Synthetic labels are loaded only after the frozen decision and are used only below for evaluation statistics.",
         },
@@ -584,6 +639,8 @@ def write_reliability_summary(
             "available_side_structure": _stats(structure),
             "reliability": _stats(reliability),
             "fused_risk": _stats(policy["fused_risk"]),
+            "user_node_confidence": _stats(policy["user_node_confidence"]),
+            "item_node_confidence": _stats(policy["item_node_confidence"]),
             "gated_soft_risk": _stats(policy["gated_soft_risk"]),
             "propagation_weight": _stats(weights),
             "user_degree": _stats(policy["user_degree"]),
@@ -659,7 +716,8 @@ def write_reliability_summary(
 def write_training_summary(
         output_dir, mode, requested_epochs, epochs_completed, best_epoch,
         best_recall, best_ndcg, final_loss, propagation_edge_count,
-        bpr_positive_edge_count):
+        bpr_positive_edge_count, representation_modulation_mode,
+        representation_modulation_ramp_epochs, representation_modulation_lambda):
     """Write the small outcome needed to compare the completed 100-epoch runs."""
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -674,7 +732,28 @@ def write_training_summary(
         "propagation_edge_count": int(propagation_edge_count),
         "bpr_positive_edge_count": int(bpr_positive_edge_count),
         "objective": "Original NR-GCF BPR plus L2; reliability does not weight the loss.",
-        "new_stage_two_norm_added": False,
+        "representation_modulation": {
+            "mode": str(representation_modulation_mode),
+            "ramp_epochs": int(representation_modulation_ramp_epochs),
+            "lambda": float(representation_modulation_lambda),
+            "stage_one": (
+                "ordinary LightGCN propagation without modulation"
+                if representation_modulation_mode in (
+                    "none", "paper_stage_two",
+                    "reliability_weighted_stage_two"
+                ) else "legacy cross modulation from epoch one"
+            ),
+            "stage_two_scale_estimator": (
+                "disabled"
+                if representation_modulation_mode == "none"
+                else (
+                    "frozen retained-edge-reliability-weighted cross-type RMS"
+                    if representation_modulation_mode
+                    == "reliability_weighted_stage_two"
+                    else "unweighted cross-type RMS"
+                )
+            ),
+        },
     }
     os.makedirs(output_dir, exist_ok=True)
     _write_json(os.path.join(output_dir, "training_summary.json"), report)

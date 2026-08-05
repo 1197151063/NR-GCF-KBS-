@@ -28,6 +28,11 @@ def summarize(root):
         training_path = reliability_path.with_name("training_summary.json")
         training = _read(training_path) if training_path.exists() else {}
         evaluation = reliability.get("synthetic_label_evaluation")
+        representation_modulation = (
+            training.get("representation_modulation")
+            or reliability.get("representation_modulation")
+            or {}
+        )
         runs.append({
             "run": str(reliability_path.parent.parent.relative_to(root)),
             "dataset": reliability.get("dataset"),
@@ -36,6 +41,9 @@ def summarize(root):
             "requested_noise_ratio": reliability.get("requested_noise_ratio"),
             "filtering_epoch": reliability.get("filtering_epoch"),
             "momentum_semantics": reliability.get("momentum_semantics"),
+            "representation_modulation_mode": representation_modulation.get("mode"),
+            "representation_modulation_ramp_epochs": representation_modulation.get("ramp_epochs"),
+            "representation_modulation_lambda": representation_modulation.get("lambda"),
             "adaptive_budget_count": reliability.get(
                 "adaptive_budget_count_without_connectivity_constraint"
             ),
@@ -70,7 +78,7 @@ def summarize(root):
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v3",
+        "schema_version": "nrgcf_reliability_comparison_v4",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

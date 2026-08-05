@@ -36,6 +36,13 @@ if world.config['dataset'] == 'amazon-book':
         'lr':world.lr,#LEARNING_RATE
     }
 
+config['representation_modulation_mode'] = (
+    world.args.representation_modulation_mode
+)
+config['representation_modulation_ramp_epochs'] = (
+    world.args.representation_modulation_ramp_epochs
+)
+
 def Fast_Sampling(dataset:Loader):
     """
     With Uniformal Sampling on Graph
@@ -116,6 +123,18 @@ if (world.args.export_edge_diagnostics
         'and therefore can only be combined with --edge-filter-mode current. '
         'The comparison modes write compact JSON via --edge-reliability-dir.'
     )
+if world.args.representation_modulation_ramp_epochs < 0:
+    raise ValueError('--representation-modulation-ramp-epochs cannot be negative')
+if not 0.0 <= float(world.lambda_) <= 1.0:
+    raise ValueError('--lambda_ must be within [0, 1]')
+if (world.args.representation_modulation_mode
+        == 'reliability_weighted_stage_two'
+        and world.args.edge_filter_mode != 'hard_structure_momentum'):
+    raise ValueError(
+        'reliability_weighted_stage_two requires '
+        '--edge-filter-mode hard_structure_momentum so its frozen confidence '
+        'uses the validated structure-momentum semantics.'
+    )
 dataset = Loader()
 log_path = init_logger(model_name='NR-GCF-new', dataset_name=world.config['dataset'])
 
@@ -165,6 +184,7 @@ best_ndcg = 0.
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
+    model.set_training_epoch(epoch)
     loss = train(dataset=dataset,
                  model=model,
                  opt=opt,
@@ -221,6 +241,17 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     'raw_momentum_min': float(x_min.detach().cpu().item()),
                     'raw_momentum_max': float(x_max.detach().cpu().item()),
                     'uses_synthetic_labels': False,
+                }
+                current_policy['representation_modulation'] = {
+                    'mode': world.args.representation_modulation_mode,
+                    'lambda': float(world.lambda_),
+                    'ramp_epochs': int(
+                        world.args.representation_modulation_ramp_epochs
+                    ),
+                    'stage_one_modulation_active': (
+                        world.args.representation_modulation_mode
+                        == 'legacy_always'
+                    ),
                 }
                 repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 write_reliability_summary(
@@ -305,6 +336,12 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 f'evaluation mask remains {evaluation_train_edge_index.size(1)} '
                 'pre-filter observed edges.'
             )
+            model.activate_stage_two_modulation(filtering_epoch=epoch)
+            if world.args.representation_modulation_mode == 'paper_stage_two':
+                print_log(
+                    'Paper-consistent stage two armed: unweighted cross-type '
+                    'modulation begins with the next optimization epoch.'
+                )
             del retained_edge_mask
             del filtered_train_edge_index
         else:
@@ -340,6 +377,17 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             )
             if uses_stable_momentum:
                 policy['warmup_epoch_count'] = active_filtering_epoch
+            policy['representation_modulation'] = {
+                'mode': world.args.representation_modulation_mode,
+                'lambda': float(world.lambda_),
+                'ramp_epochs': int(
+                    world.args.representation_modulation_ramp_epochs
+                ),
+                'stage_one_modulation_active': (
+                    world.args.representation_modulation_mode
+                    == 'legacy_always'
+                ),
+            }
             repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             write_reliability_summary(
                 output_dir=world.args.edge_reliability_dir,
@@ -393,8 +441,34 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             else:
                 print_log(
                     'Stage-two none applied: graph, positive sampling, BPR '
-                    'objective, and existing representation modulation are unchanged.'
+                    'objective, and evaluation mask are unchanged.'
                 )
+            user_modulation_weight = None
+            item_modulation_weight = None
+            if (world.args.representation_modulation_mode
+                    == 'reliability_weighted_stage_two'):
+                user_modulation_weight = torch.from_numpy(
+                    policy['user_node_confidence']
+                )
+                item_modulation_weight = torch.from_numpy(
+                    policy['item_node_confidence']
+                )
+            model.activate_stage_two_modulation(
+                filtering_epoch=epoch,
+                user_weight=user_modulation_weight,
+                item_weight=item_modulation_weight,
+            )
+            if world.args.representation_modulation_mode in (
+                    'paper_stage_two', 'reliability_weighted_stage_two'):
+                print_log(
+                    'Representation modulation stage armed: mode='
+                    f'{world.args.representation_modulation_mode}, '
+                    f'lambda={world.lambda_}, ramp_epochs='
+                    f'{world.args.representation_modulation_ramp_epochs}; '
+                    'activation begins with the next optimization epoch.'
+                )
+            del user_modulation_weight
+            del item_modulation_weight
             del raw_momentum
             del policy
             stable_edge_momentum = None
@@ -437,6 +511,13 @@ if (world.args.edge_filter_mode != 'current'
         final_loss=float(loss.detach().cpu().item()),
         propagation_edge_count=model.active_edge_count,
         bpr_positive_edge_count=dataset.train_edge_index.size(1),
+        representation_modulation_mode=(
+            world.args.representation_modulation_mode
+        ),
+        representation_modulation_ramp_epochs=(
+            world.args.representation_modulation_ramp_epochs
+        ),
+        representation_modulation_lambda=world.lambda_,
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

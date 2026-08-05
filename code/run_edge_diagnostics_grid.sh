@@ -75,8 +75,17 @@ Optional variables:
                           post-filter smoke epochs (default: entry default)
   TRAIN_PATIENCE          optional early-stopping patience override
   EDGE_FILTER_MODE        current, none, hard_consensus, hard_structure_only,
-                          soft_reliability, or gated_soft_reliability
+                          soft_reliability, gated_soft_reliability, or
+                          hard_structure_momentum
                           (default: current)
+  REPRESENTATION_MODULATION_MODE
+                          none, legacy_always, paper_stage_two, or
+                          reliability_weighted_stage_two
+                          (default: paper_stage_two)
+  REPRESENTATION_MODULATION_RAMP_EPOCHS
+                          post-filter linear transition length (default: 0)
+  REPRESENTATION_MODULATION_LAMBDA
+                          cross-type modulation strength in [0,1] (default: 1)
   SUMMARY_ONLY            1: write compact reliability JSON and no per-edge
                           CSV/Parquet (default: 0)
   KEEP_EDGE_LABELS        retain the temporary synthetic-label CSV (default: 1)
@@ -140,6 +149,9 @@ reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
 reliability_filter_epoch="${RELIABILITY_FILTER_EPOCH:-15}"
 reliability_momentum_decay="${RELIABILITY_MOMENTUM_DECAY:-0.90}"
+representation_modulation_mode="${REPRESENTATION_MODULATION_MODE:-paper_stage_two}"
+representation_modulation_ramp_epochs="${REPRESENTATION_MODULATION_RAMP_EPOCHS:-0}"
+representation_modulation_lambda="${REPRESENTATION_MODULATION_LAMBDA:-1}"
 
 for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis summary_only keep_edge_labels keep_generated_train; do
   value="${!binary_flag}"
@@ -160,6 +172,35 @@ fi
 if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
    [[ "$reliability_filter_epoch" -lt 2 ]]; then
   echo "RELIABILITY_FILTER_EPOCH must be an integer >= 2." >&2
+  exit 2
+fi
+if [[ "$representation_modulation_mode" != "none" && \
+      "$representation_modulation_mode" != "legacy_always" && \
+      "$representation_modulation_mode" != "paper_stage_two" && \
+      "$representation_modulation_mode" != "reliability_weighted_stage_two" ]]; then
+  echo "Unsupported REPRESENTATION_MODULATION_MODE: $representation_modulation_mode" >&2
+  exit 2
+fi
+if ! [[ "$representation_modulation_ramp_epochs" =~ ^[0-9]+$ ]]; then
+  echo "REPRESENTATION_MODULATION_RAMP_EPOCHS must be a non-negative integer." >&2
+  exit 2
+fi
+if ! python3 - "$representation_modulation_lambda" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and 0.0 <= value <= 1.0 else 1)
+PY
+then
+  echo "REPRESENTATION_MODULATION_LAMBDA must be within [0,1]." >&2
+  exit 2
+fi
+if [[ "$representation_modulation_mode" == "reliability_weighted_stage_two" && \
+      "$edge_filter_mode" != "hard_structure_momentum" ]]; then
+  echo "reliability_weighted_stage_two requires EDGE_FILTER_MODE=hard_structure_momentum." >&2
   exit 2
 fi
 if [[ -z "$output_root" ]]; then
@@ -514,6 +555,9 @@ echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
 echo "  reliability filter epoch: $reliability_filter_epoch"
+echo "  representation modulation: $representation_modulation_mode"
+echo "  representation ramp epochs: $representation_modulation_ramp_epochs"
+echo "  representation lambda: $representation_modulation_lambda"
 echo "  summary only: $summary_only"
 echo "  dry run:    $dry_run"
 
@@ -540,6 +584,7 @@ for ratio in $noise_ratios; do
     if [[ "$edge_filter_mode" == "hard_structure_momentum" ]]; then
       run_name="${run_name}_filter_${reliability_filter_epoch}"
     fi
+    run_name="${run_name}_mod_${representation_modulation_mode}"
     run_dir="${output_root%/}/$dataset/$run_name"
     noise_type="prepared_additive_nonedge"
     if [[ "$noise_mode" == "prepared" ]]; then
@@ -612,6 +657,9 @@ for ratio in $noise_ratios; do
       --edge-diagnostics-topk "$topk"
       --edge-diagnostics-chunk-size "$chunk_size"
       --edge-diagnostics-min-degree "$min_degree"
+      --representation-modulation-mode "$representation_modulation_mode"
+      --representation-modulation-ramp-epochs "$representation_modulation_ramp_epochs"
+      --lambda_ "$representation_modulation_lambda"
     )
     if [[ "$summary_only" == "1" ]]; then
       command+=(
@@ -659,6 +707,9 @@ for ratio in $noise_ratios; do
       echo "edge_filter_mode=$edge_filter_mode"
       echo "reliability_filter_epoch=$reliability_filter_epoch"
       echo "reliability_momentum_decay=$reliability_momentum_decay"
+      echo "representation_modulation_mode=$representation_modulation_mode"
+      echo "representation_modulation_ramp_epochs=$representation_modulation_ramp_epochs"
+      echo "representation_modulation_lambda=$representation_modulation_lambda"
       echo "summary_only=$summary_only"
       echo "keep_edge_labels=$keep_edge_labels"
       echo "keep_generated_train=$keep_generated_train"
