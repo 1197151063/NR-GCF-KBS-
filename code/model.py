@@ -246,6 +246,7 @@ class NRGCF(RecModel):
         self.modulation_progress = 1.0 if self.modulation_active else 0.0
         self.last_user_block_rms = None
         self.last_item_block_rms = None
+        self.last_modulation_layer_scales = []
         self.register_buffer(
             'user_modulation_weight', torch.ones(num_users, dtype=torch.float32)
         )
@@ -359,6 +360,10 @@ class NRGCF(RecModel):
         items_norm = self._weighted_rms(items, self.item_modulation_weight)
         self.last_user_block_rms = users_norm.detach()
         self.last_item_block_rms = items_norm.detach()
+        if not self.training:
+            self.last_modulation_layer_scales.append(
+                (users_norm.detach(), items_norm.detach())
+            )
         users = users / (items_norm)
         items = items / (users_norm)
         x = torch.cat([users,items])
@@ -374,6 +379,16 @@ class NRGCF(RecModel):
 
         user_rms = scalar_or_none(self.last_user_block_rms)
         item_rms = scalar_or_none(self.last_item_block_rms)
+        layer_scales = []
+        for layer, (layer_user_rms, layer_item_rms) in enumerate(
+                self.last_modulation_layer_scales, 1):
+            layer_scales.append({
+                'layer': int(layer),
+                'user_block_rms': scalar_or_none(layer_user_rms),
+                'item_block_rms': scalar_or_none(layer_item_rms),
+                'user_embedding_divisor': scalar_or_none(layer_item_rms),
+                'item_embedding_divisor': scalar_or_none(layer_user_rms),
+            })
         return {
             'active': bool(self.modulation_active),
             'progress': float(self.modulation_progress),
@@ -384,12 +399,15 @@ class NRGCF(RecModel):
             'item_block_rms': item_rms,
             'user_embedding_divisor': item_rms,
             'item_embedding_divisor': user_rms,
+            'layer_scales': layer_scales,
         }
         
     def forward(self,edge_index):
         user_emb = self.user_embedding.weight
         item_emb = self.item_embedding.weight
         x = torch.cat([user_emb, item_emb], dim=0)
+        if not self.training:
+            self.last_modulation_layer_scales = []
         out = [x]
         for i in range(self.config['K']):
             x = self.propagate(edge_index, x=x)
