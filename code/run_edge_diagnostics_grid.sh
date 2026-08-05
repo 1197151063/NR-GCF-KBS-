@@ -74,12 +74,15 @@ Optional variables:
   TRAIN_EPOCHS            optional total epoch override, e.g. 17 for two
                           post-filter smoke epochs (default: entry default)
   TRAIN_PATIENCE          optional early-stopping patience override
+  TRAIN_LR                optional learning-rate override
+  TRAIN_INIT_WEIGHT       optional embedding initialization std override
   EDGE_FILTER_MODE        current, none, hard_consensus, hard_structure_only,
                           soft_reliability, gated_soft_reliability, or
                           hard_structure_momentum
                           (default: current)
   REPRESENTATION_MODULATION_MODE
-                          none, legacy_always, original_stage_two,
+                          none, legacy_always, original_always,
+                          original_stage_two, reliability_weighted_always,
                           paper_stage_two (alias), or
                           reliability_weighted_stage_two
                           (default: original_stage_two)
@@ -141,6 +144,8 @@ hard_support_limit="${HARD_SUPPORT_LIMIT:-16}"
 run_pilot_analysis="${RUN_PILOT_ANALYSIS:-1}"
 train_epochs="${TRAIN_EPOCHS:-}"
 train_patience="${TRAIN_PATIENCE:-}"
+train_lr="${TRAIN_LR:-}"
+train_init_weight="${TRAIN_INIT_WEIGHT:-}"
 edge_filter_mode="${EDGE_FILTER_MODE:-current}"
 summary_only="${SUMMARY_ONLY:-0}"
 keep_edge_labels="${KEEP_EDGE_LABELS:-1}"
@@ -178,8 +183,10 @@ if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
 fi
 if [[ "$representation_modulation_mode" != "none" && \
       "$representation_modulation_mode" != "legacy_always" && \
+      "$representation_modulation_mode" != "original_always" && \
       "$representation_modulation_mode" != "original_stage_two" && \
       "$representation_modulation_mode" != "paper_stage_two" && \
+      "$representation_modulation_mode" != "reliability_weighted_always" && \
       "$representation_modulation_mode" != "reliability_weighted_stage_two" ]]; then
   echo "Unsupported REPRESENTATION_MODULATION_MODE: $representation_modulation_mode" >&2
   exit 2
@@ -201,9 +208,10 @@ then
   echo "REPRESENTATION_MODULATION_LAMBDA must be within [0,1]." >&2
   exit 2
 fi
-if [[ "$representation_modulation_mode" == "reliability_weighted_stage_two" && \
+if [[ ( "$representation_modulation_mode" == "reliability_weighted_always" || \
+        "$representation_modulation_mode" == "reliability_weighted_stage_two" ) && \
       "$edge_filter_mode" != "hard_structure_momentum" ]]; then
-  echo "reliability_weighted_stage_two requires EDGE_FILTER_MODE=hard_structure_momentum." >&2
+  echo "Reliability-weighted modulation requires EDGE_FILTER_MODE=hard_structure_momentum." >&2
   exit 2
 fi
 if [[ -z "$output_root" ]]; then
@@ -561,6 +569,8 @@ echo "  reliability filter epoch: $reliability_filter_epoch"
 echo "  representation modulation: $representation_modulation_mode"
 echo "  representation ramp epochs: $representation_modulation_ramp_epochs"
 echo "  representation lambda: $representation_modulation_lambda"
+echo "  train lr: ${train_lr:-entry_default}"
+echo "  train init weight: ${train_init_weight:-entry_default}"
 echo "  summary only: $summary_only"
 echo "  dry run:    $dry_run"
 
@@ -696,6 +706,12 @@ for ratio in $noise_ratios; do
     if [[ -n "$train_patience" ]]; then
       command+=(--patience "$train_patience")
     fi
+    if [[ -n "$train_lr" ]]; then
+      command+=(--lr "$train_lr")
+    fi
+    if [[ -n "$train_init_weight" ]]; then
+      command+=(--init_weight "$train_init_weight")
+    fi
 
     {
       echo "base_commit=$commit_hash"
@@ -720,6 +736,8 @@ for ratio in $noise_ratios; do
       echo "hard_support_limit=$hard_support_limit"
       echo "train_epochs=${train_epochs:-entry_default}"
       echo "train_patience=${train_patience:-entry_default}"
+      echo "train_lr=${train_lr:-entry_default}"
+      echo "train_init_weight=${train_init_weight:-entry_default}"
       printf 'command='
       printf '%q ' "${command[@]}"
       printf '\n'

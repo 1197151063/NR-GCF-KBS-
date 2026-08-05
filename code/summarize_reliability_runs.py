@@ -55,6 +55,9 @@ def summarize(root):
             "best_epoch": training.get("best_epoch"),
             "best_recall_at_20": training.get("best_recall_at_20"),
             "best_ndcg_at_20": training.get("best_ndcg_at_20"),
+            "best_post_filter_epoch": training.get("best_post_filter_epoch"),
+            "best_post_filter_recall_at_20": training.get("best_post_filter_recall_at_20"),
+            "best_post_filter_ndcg_at_20": training.get("best_post_filter_ndcg_at_20"),
             "final_training_loss": training.get("final_training_loss"),
             "retained_edge_count": reliability.get("retained_edge_count"),
             "removed_edge_count": reliability.get("removed_edge_count"),
@@ -78,7 +81,7 @@ def summarize(root):
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v4",
+        "schema_version": "nrgcf_reliability_comparison_v5",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

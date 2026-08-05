@@ -229,7 +229,8 @@ class NRGCF(RecModel):
             # Backward-compatible alias used by the first stage-two pilot.
             self.representation_modulation_mode = 'original_stage_two'
         valid_modulation_modes = {
-            'none', 'legacy_always', 'original_stage_two',
+            'none', 'legacy_always', 'original_always',
+            'original_stage_two', 'reliability_weighted_always',
             'reliability_weighted_stage_two',
         }
         if self.representation_modulation_mode not in valid_modulation_modes:
@@ -244,7 +245,10 @@ class NRGCF(RecModel):
             raise ValueError('representation modulation ramp cannot be negative')
         self.modulation_filtering_epoch = None
         self.modulation_active = (
-            self.representation_modulation_mode == 'legacy_always'
+            self.representation_modulation_mode in (
+                'legacy_always', 'original_always',
+                'reliability_weighted_always',
+            )
         )
         self.modulation_progress = 1.0 if self.modulation_active else 0.0
         self.last_user_block_rms = None
@@ -296,11 +300,14 @@ class NRGCF(RecModel):
         They affect only the global cross-type scale estimator, never BPR or
         message-passing edge weights.
         """
-        if self.representation_modulation_mode in ('none', 'legacy_always'):
+        if self.representation_modulation_mode in (
+                'none', 'legacy_always', 'original_always'):
             return
         weighted = (
-            self.representation_modulation_mode
-            == 'reliability_weighted_stage_two'
+            self.representation_modulation_mode in (
+                'reliability_weighted_always',
+                'reliability_weighted_stage_two',
+            )
         )
         if weighted and (user_weight is None or item_weight is None):
             raise ValueError(
@@ -324,6 +331,11 @@ class NRGCF(RecModel):
             target.copy_(value)
         self.modulation_filtering_epoch = int(filtering_epoch)
         self.modulation_active = True
+        if self.representation_modulation_mode == 'reliability_weighted_always':
+            # Cross norm is already active.  Filtering changes only the frozen
+            # RMS estimator weights, so there is no on/off operator switch.
+            self.modulation_progress = 1.0
+            return
         # Stage two starts with the next optimization epoch.  This avoids
         # evaluating a newly switched operator before it has received an update.
         self.modulation_progress = 0.0
@@ -333,7 +345,9 @@ class NRGCF(RecModel):
         """Update only the deterministic stage-two interpolation coefficient."""
         if not self.modulation_active:
             return
-        if self.representation_modulation_mode == 'legacy_always':
+        if self.representation_modulation_mode in (
+                'legacy_always', 'original_always',
+                'reliability_weighted_always'):
             self.modulation_progress = 1.0
             return
         elapsed = int(epoch) - int(self.modulation_filtering_epoch)

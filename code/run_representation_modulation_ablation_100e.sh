@@ -17,6 +17,8 @@ export GPU_ID="${GPU_ID:-0}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/nrgcf_representation_modulation_100e}"
 export TRAIN_EPOCHS="${TRAIN_EPOCHS:-100}"
 export TRAIN_PATIENCE="${TRAIN_PATIENCE:-1000}"
+export TRAIN_LR="${TRAIN_LR:-0.0005}"
+export TRAIN_INIT_WEIGHT="${TRAIN_INIT_WEIGHT:-0.01}"
 export STOP_AFTER_FILTER=0
 export SUMMARY_ONLY=1
 export RUN_PILOT_ANALYSIS=0
@@ -31,7 +33,7 @@ export RELIABILITY_STRUCTURE_WEIGHT="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 export RELIABILITY_MIN_WEIGHT="${RELIABILITY_MIN_WEIGHT:-0.10}"
 export REPRESENTATION_MODULATION_LAMBDA=1
 
-modulation_modes="${MODULATION_MODES:-none original_stage_two reliability_weighted_stage_two}"
+modulation_modes="${MODULATION_MODES:-original_always reliability_weighted_always}"
 for modulation_mode in $modulation_modes; do
   # Exact original forward path: no lambda blending and no transition ramp.
   export REPRESENTATION_MODULATION_RAMP_EPOCHS=0

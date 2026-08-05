@@ -125,11 +125,12 @@ if (world.args.export_edge_diagnostics
     )
 if world.args.representation_modulation_ramp_epochs < 0:
     raise ValueError('--representation-modulation-ramp-epochs cannot be negative')
-if (world.args.representation_modulation_mode
-        == 'reliability_weighted_stage_two'
+if (world.args.representation_modulation_mode in (
+        'reliability_weighted_always',
+        'reliability_weighted_stage_two')
         and world.args.edge_filter_mode != 'hard_structure_momentum'):
     raise ValueError(
-        'reliability_weighted_stage_two requires '
+        'reliability-weighted modulation requires '
         '--edge-filter-mode hard_structure_momentum so its frozen confidence '
         'uses the validated structure-momentum semantics.'
     )
@@ -179,6 +180,10 @@ max_score = 0.
 best_recall = 0.
 best_epoch = 0
 best_ndcg = 0.
+best_post_filter_score = None
+best_post_filter_epoch = None
+best_post_filter_recall = None
+best_post_filter_ndcg = None
 representation_modulation_trace = []
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
@@ -249,8 +254,10 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                         world.args.representation_modulation_ramp_epochs
                     ),
                     'stage_one_modulation_active': (
-                        world.args.representation_modulation_mode
-                        == 'legacy_always'
+                        world.args.representation_modulation_mode in (
+                            'legacy_always', 'original_always',
+                            'reliability_weighted_always',
+                        )
                     ),
                     'scale_definition': 'uncapped_cross_type_rms',
                 }
@@ -387,8 +394,10 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     world.args.representation_modulation_ramp_epochs
                 ),
                 'stage_one_modulation_active': (
-                    world.args.representation_modulation_mode
-                    == 'legacy_always'
+                    world.args.representation_modulation_mode in (
+                        'legacy_always', 'original_always',
+                        'reliability_weighted_always',
+                    )
                 ),
                 'scale_definition': 'uncapped_cross_type_rms',
             }
@@ -449,8 +458,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 )
             user_modulation_weight = None
             item_modulation_weight = None
-            if (world.args.representation_modulation_mode
-                    == 'reliability_weighted_stage_two'):
+            if world.args.representation_modulation_mode in (
+                    'reliability_weighted_always',
+                    'reliability_weighted_stage_two'):
                 user_modulation_weight = torch.from_numpy(
                     policy['user_node_confidence']
                 )
@@ -464,14 +474,22 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             )
             if world.args.representation_modulation_mode in (
                     'original_stage_two', 'paper_stage_two',
+                    'reliability_weighted_always',
                     'reliability_weighted_stage_two'):
-                print_log(
-                    'Representation modulation stage armed: mode='
-                    f'{world.args.representation_modulation_mode}, '
-                    'operator=direct_cross_norm, ramp_epochs='
-                    f'{world.args.representation_modulation_ramp_epochs}; '
-                    'activation begins with the next optimization epoch.'
-                )
+                if (world.args.representation_modulation_mode
+                        == 'reliability_weighted_always'):
+                    print_log(
+                        'Always-on direct cross_norm retained; its RMS '
+                        'estimator is now frozen reliability-weighted.'
+                    )
+                else:
+                    print_log(
+                        'Representation modulation stage armed: mode='
+                        f'{world.args.representation_modulation_mode}, '
+                        'operator=direct_cross_norm, ramp_epochs='
+                        f'{world.args.representation_modulation_ramp_epochs}; '
+                        'activation begins with the next optimization epoch.'
+                    )
             del user_modulation_weight
             del item_modulation_weight
             del raw_momentum
@@ -495,6 +513,14 @@ for epoch in range(1, world.TRAIN_epochs + 1):
     modulation_snapshot = model.modulation_snapshot()
     modulation_snapshot['epoch'] = int(epoch)
     representation_modulation_trace.append(modulation_snapshot)
+    if epoch > active_filtering_epoch:
+        post_filter_score = recall[20] + ndcg[20]
+        if (best_post_filter_score is None
+                or post_filter_score > best_post_filter_score):
+            best_post_filter_score = post_filter_score
+            best_post_filter_epoch = epoch
+            best_post_filter_recall = recall[20]
+            best_post_filter_ndcg = ndcg[20]
     flag,best,patience = utils.early_stopping(recall[20],ndcg[20],best,patience,model)
     if patience == 0:
         best_epoch = epoch
@@ -527,6 +553,9 @@ if (world.args.edge_filter_mode != 'current'
         ),
         representation_modulation_lambda=world.lambda_,
         representation_modulation_trace=representation_modulation_trace,
+        best_post_filter_epoch=best_post_filter_epoch,
+        best_post_filter_recall=best_post_filter_recall,
+        best_post_filter_ndcg=best_post_filter_ndcg,
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

@@ -42,15 +42,19 @@ def parse_args():
         choices=[
             'none',
             'legacy_always',
+            'original_always',
             'original_stage_two',
             'paper_stage_two',
+            'reliability_weighted_always',
             'reliability_weighted_stage_two',
         ],
         help=(
-            'none disables modulation; legacy_always preserves the previous '
-            'from-epoch-one code path; original_stage_two activates the '
+            'none disables modulation; legacy_always/original_always apply '
+            'the supplied direct cross_norm from epoch one; original_stage_two activates the '
             'released direct cross_norm operation only after filtering; '
             'paper_stage_two is a backward-compatible alias; '
+            'reliability_weighted_always keeps cross_norm active throughout '
+            'and changes only its RMS estimator after filtering; '
             'reliability_weighted_stage_two additionally estimates the '
             'stage-two scales from frozen retained-edge reliability'
         ),

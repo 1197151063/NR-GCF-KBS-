@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v6"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v7"
 
 
 def _require_torch():
@@ -621,7 +621,7 @@ def write_reliability_summary(
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
-            "representation_modulation": "Configured separately: original_stage_two starts the released direct cross_norm only after filtering; reliability_weighted_stage_two changes only its frozen RMS estimator to use retained-edge reliability.",
+            "representation_modulation": "Configured separately: original_always applies direct cross_norm from epoch one; reliability_weighted_always preserves that operator and changes only its frozen RMS estimator after filtering.",
         },
         "feature_definitions": {
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
@@ -718,7 +718,8 @@ def write_training_summary(
         best_recall, best_ndcg, final_loss, propagation_edge_count,
         bpr_positive_edge_count, representation_modulation_mode,
         representation_modulation_ramp_epochs, representation_modulation_lambda,
-        representation_modulation_trace):
+        representation_modulation_trace, best_post_filter_epoch,
+        best_post_filter_recall, best_post_filter_ndcg):
     """Write the small outcome needed to compare the completed 100-epoch runs."""
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -729,6 +730,18 @@ def write_training_summary(
         "best_epoch": int(best_epoch),
         "best_recall_at_20": float(best_recall),
         "best_ndcg_at_20": float(best_ndcg),
+        "best_post_filter_epoch": (
+            int(best_post_filter_epoch)
+            if best_post_filter_epoch is not None else None
+        ),
+        "best_post_filter_recall_at_20": (
+            float(best_post_filter_recall)
+            if best_post_filter_recall is not None else None
+        ),
+        "best_post_filter_ndcg_at_20": (
+            float(best_post_filter_ndcg)
+            if best_post_filter_ndcg is not None else None
+        ),
         "final_training_loss": float(final_loss),
         "propagation_edge_count": int(propagation_edge_count),
         "bpr_positive_edge_count": int(bpr_positive_edge_count),
@@ -743,15 +756,17 @@ def write_training_summary(
                 if representation_modulation_mode in (
                     "none", "original_stage_two", "paper_stage_two",
                     "reliability_weighted_stage_two"
-                ) else "legacy cross modulation from epoch one"
+                ) else "direct unweighted cross_norm from epoch one"
             ),
             "stage_two_scale_estimator": (
                 "disabled"
                 if representation_modulation_mode == "none"
                 else (
                     "frozen retained-edge-reliability-weighted cross-type RMS"
-                    if representation_modulation_mode
-                    == "reliability_weighted_stage_two"
+                    if representation_modulation_mode in (
+                        "reliability_weighted_always",
+                        "reliability_weighted_stage_two",
+                    )
                     else "unweighted cross-type RMS"
                 )
             ),
