@@ -323,8 +323,10 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
             "--edge-diagnostics-format", "csv",
             "--edge-diagnostics-topk", "7",
             "--edge-diagnostics-chunk-size", "128",
-            "--edge-filter-mode", "gated_soft_reliability",
+            "--edge-filter-mode", "hard_structure_momentum",
             "--export-edge-reliability-summary",
+            "--edge-reliability-filtering-epoch", "20",
+            "--edge-reliability-momentum-decay", "0.85",
             "--edge-reliability-min-weight", "0.2",
         ]):
             configured = parse.parse_args()
@@ -332,8 +334,10 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertEqual(configured.edge_diagnostics_format, "csv")
         self.assertEqual(configured.edge_diagnostics_topk, 7)
         self.assertEqual(configured.edge_diagnostics_chunk_size, 128)
-        self.assertEqual(configured.edge_filter_mode, "gated_soft_reliability")
+        self.assertEqual(configured.edge_filter_mode, "hard_structure_momentum")
         self.assertTrue(configured.export_edge_reliability_summary)
+        self.assertEqual(configured.edge_reliability_filtering_epoch, 20)
+        self.assertEqual(configured.edge_reliability_momentum_decay, 0.85)
         self.assertEqual(configured.edge_reliability_min_weight, 0.2)
 
 

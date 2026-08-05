@@ -71,12 +71,32 @@ class EdgeReliabilityMathTest(unittest.TestCase):
         self.assertGreater(float(risk[3]), 0.0)
         self.assertLess(float(risk[3]), 1.0)
 
+    def test_top_fused_risk_matches_budget_with_stable_ties(self):
+        retained = edge_reliability._top_risk_retained_mask(
+            risk=np.array([0.9, 0.9, 0.2, np.nan, 0.8]),
+            target_remove_count=3,
+        )
+        np.testing.assert_array_equal(
+            retained, np.array([False, False, True, True, False])
+        )
+
 
 @unittest.skipUnless(
     edge_reliability is not None and edge_reliability.torch is not None,
     "NumPy or PyTorch unavailable",
 )
 class EdgeReliabilityPolicyTest(unittest.TestCase):
+    def test_stable_edge_momentum_initializes_then_updates_ema(self):
+        torch = edge_reliability.torch
+        tracker = edge_reliability.StableEdgeMomentum(
+            edge_count=3, decay=0.9, device=torch.device("cpu")
+        )
+        tracker.update(torch.tensor([0, 2]), torch.tensor([1.0, 3.0]))
+        tracker.update(torch.tensor([0, 1, 2]), torch.tensor([2.0, 4.0, 1.0]))
+        np.testing.assert_allclose(
+            tracker.snapshot().numpy(), np.array([1.1, 4.0, 2.8]), rtol=1e-6
+        )
+
     def test_soft_policy_keeps_bpr_edges_and_protects_degree_one(self):
         torch = edge_reliability.torch
         edges = torch.tensor([

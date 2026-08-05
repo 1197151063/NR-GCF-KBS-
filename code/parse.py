@@ -67,8 +67,9 @@ def parse_args():
     parser.add_argument('--edge-filter-mode', type=str, default='current',
                         choices=['current', 'none', 'hard_consensus',
                                  'hard_structure_only', 'soft_reliability',
-                                 'gated_soft_reliability'],
-                        help='epoch-15 graph policy; current preserves the original NR-GCF implementation')
+                                 'gated_soft_reliability',
+                                 'hard_structure_momentum'],
+                        help='graph filtering policy; current preserves the original epoch-15 NR-GCF implementation')
     parser.add_argument('--export-edge-reliability-summary', action='store_true',
                         help='write compact JSON policy statistics without a per-edge table')
     parser.add_argument('--edge-reliability-dir', type=str, default='edge_reliability',
@@ -85,5 +86,9 @@ def parse_args():
                         help='diagnostic soft reliability weight assigned to structural percentile rank')
     parser.add_argument('--edge-reliability-min-weight', type=float, default=0.10,
                         help='minimum propagation weight in soft reliability mode')
+    parser.add_argument('--edge-reliability-filtering-epoch', type=int, default=15,
+                        help='warm-up/filter epoch for hard_structure_momentum')
+    parser.add_argument('--edge-reliability-momentum-decay', type=float, default=0.90,
+                        help='stable per-edge EMA decay for hard_structure_momentum')
 
     return parser.parse_args()

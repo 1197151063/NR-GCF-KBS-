@@ -65,7 +65,10 @@ def train(dataset:Loader,
           model:NRGCF,
           opt:torch.optim.Optimizer,
           epoch,
-          edge_loss_history=None):
+          edge_loss_history=None,
+          stable_edge_momentum=None,
+          stable_filtering_epoch=None,
+          update_legacy_momentum=True):
     model = model
     model.train()
     edge_index,indexes = Fast_Sampling(dataset=dataset)
@@ -74,11 +77,19 @@ def train(dataset:Loader,
     for edge_label_index,index in zip(edge_index,indexes):
         opt.zero_grad()
         loss = model.get_loss(edge_label_index)
-        if epoch < 15:
+        needs_legacy_loss = update_legacy_momentum and epoch < 15
+        needs_stable_loss = (
+            stable_edge_momentum is not None
+            and epoch <= int(stable_filtering_epoch)
+        )
+        if needs_legacy_loss or needs_stable_loss:
             instance_loss = model.get_instance_loss(edge_label_index)
-            model.update_momentum(index, instance_loss,epoch)
-            if edge_loss_history is not None:
+            if needs_legacy_loss:
+                model.update_momentum(index, instance_loss,epoch)
+            if edge_loss_history is not None and needs_legacy_loss:
                 edge_loss_history.observe(index, instance_loss)
+            if needs_stable_loss:
+                stable_edge_momentum.update(index, instance_loss)
         loss.backward()
         opt.step()   
         aver_loss += (loss)
@@ -126,6 +137,25 @@ edge_loss_history = None
 if world.args.export_edge_diagnostics:
     from edge_diagnostics import EdgeLossHistory
     edge_loss_history = EdgeLossHistory(original_train_edge_index.size(1))
+uses_stable_momentum = (
+    world.args.edge_filter_mode == 'hard_structure_momentum'
+)
+active_filtering_epoch = (
+    int(world.args.edge_reliability_filtering_epoch)
+    if uses_stable_momentum else 15
+)
+if active_filtering_epoch < 2 or active_filtering_epoch > world.TRAIN_epochs:
+    raise ValueError(
+        'Filtering epoch must be between 2 and the configured training epochs.'
+    )
+stable_edge_momentum = None
+if uses_stable_momentum:
+    from edge_reliability import StableEdgeMomentum
+    stable_edge_momentum = StableEdgeMomentum(
+        edge_count=train_edge_index.size(1),
+        decay=world.args.edge_reliability_momentum_decay,
+        device=device,
+    )
 best = 0.
 patience = 0.
 max_score = 0.
@@ -139,8 +169,11 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                  model=model,
                  opt=opt,
                  epoch=epoch,
-                 edge_loss_history=edge_loss_history)
-    if epoch == 15:
+                 edge_loss_history=edge_loss_history,
+                 stable_edge_momentum=stable_edge_momentum,
+                 stable_filtering_epoch=active_filtering_epoch,
+                 update_legacy_momentum=not uses_stable_momentum)
+    if epoch == active_filtering_epoch:
         if world.args.edge_filter_mode == 'current':
             raw_momentum_for_diagnostics = None
             normalized_score_for_diagnostics = None
@@ -275,13 +308,21 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             del retained_edge_mask
             del filtered_train_edge_index
         else:
-            # The three pilot policies are frozen at the same epoch-15 point.
+            # Pilot policies are frozen at their configured filtering point.
             # They never alter the BPR loss formula or add a stage-two norm.
             from edge_reliability import (
                 build_reliability_policy,
                 write_reliability_summary,
             )
-            raw_momentum = model.momentum_loss.detach().clone()
+            if uses_stable_momentum:
+                raw_momentum = stable_edge_momentum.snapshot()
+                momentum_semantics = (
+                    'per_edge_ema_instance_bpr_loss_decay_'
+                    + str(world.args.edge_reliability_momentum_decay)
+                )
+            else:
+                raw_momentum = model.momentum_loss.detach().clone()
+                momentum_semantics = 'legacy_runtime_momentum'
             policy = build_reliability_policy(
                 edge_index=train_edge_index,
                 raw_momentum=raw_momentum,
@@ -295,7 +336,10 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 structure_quantile=world.args.edge_reliability_structure_quantile,
                 structure_weight=world.args.edge_reliability_structure_weight,
                 minimum_weight=world.args.edge_reliability_min_weight,
+                momentum_semantics=momentum_semantics,
             )
+            if uses_stable_momentum:
+                policy['warmup_epoch_count'] = active_filtering_epoch
             repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             write_reliability_summary(
                 output_dir=world.args.edge_reliability_dir,
@@ -312,7 +356,8 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             )
 
             if world.args.edge_filter_mode in (
-                    'hard_consensus', 'hard_structure_only'):
+                    'hard_consensus', 'hard_structure_only',
+                    'hard_structure_momentum'):
                 retained_edge_mask = policy['retained_mask'].to(
                     device=train_edge_index.device
                 )
@@ -352,9 +397,13 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 )
             del raw_momentum
             del policy
+            stable_edge_momentum = None
         original_train_edge_index = None
         if world.args.edge_diagnostics_stop_after_filter:
-            print_log('Stopped after epoch-15 filtering point by explicit diagnostics smoke-test option.')
+            print_log(
+                f'Stopped after epoch-{active_filtering_epoch} filtering point '
+                'by explicit diagnostics smoke-test option.'
+            )
             break
     end_time = time.time()
     # Evaluation always masks the complete observed input train split. This

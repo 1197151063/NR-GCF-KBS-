@@ -13,7 +13,11 @@ def _read(path):
 def _metric(evaluation, name, field):
     if not evaluation:
         return None
-    return evaluation.get("scores_for_noisy_edge", {}).get(name, {}).get(field)
+    scores = evaluation.get("scores_for_noisy_edge", {})
+    metric = scores.get(name)
+    if metric is None and name == "momentum_signal":
+        metric = scores.get("raw_runtime_momentum")
+    return (metric or {}).get(field)
 
 
 def summarize(root):
@@ -30,6 +34,11 @@ def summarize(root):
             "mode": reliability.get("mode"),
             "seed": reliability.get("seed"),
             "requested_noise_ratio": reliability.get("requested_noise_ratio"),
+            "filtering_epoch": reliability.get("filtering_epoch"),
+            "momentum_semantics": reliability.get("momentum_semantics"),
+            "adaptive_budget_count": reliability.get(
+                "adaptive_budget_count_without_connectivity_constraint"
+            ),
             "actual_noise_ratio": (
                 (reliability.get("noise_validation") or {}).get("actual_noise_ratio")
             ),
@@ -49,17 +58,19 @@ def summarize(root):
             "propagation_weight_mean": (
                 reliability.get("statistics", {}).get("propagation_weight", {}).get("mean")
             ),
-            "momentum_auroc": _metric(evaluation, "raw_runtime_momentum", "auroc"),
-            "momentum_auprc": _metric(evaluation, "raw_runtime_momentum", "average_precision"),
+            "momentum_auroc": _metric(evaluation, "momentum_signal", "auroc"),
+            "momentum_auprc": _metric(evaluation, "momentum_signal", "average_precision"),
             "structure_auroc": _metric(evaluation, "available_side_structure", "auroc"),
             "structure_auprc": _metric(evaluation, "available_side_structure", "average_precision"),
             "reliability_auroc": _metric(evaluation, "reliability", "auroc"),
             "reliability_auprc": _metric(evaluation, "reliability", "average_precision"),
+            "fused_risk_auroc": _metric(evaluation, "fused_risk", "auroc"),
+            "fused_risk_auprc": _metric(evaluation, "fused_risk", "average_precision"),
             "gated_soft_risk_auroc": _metric(evaluation, "gated_soft_risk", "auroc"),
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v2",
+        "schema_version": "nrgcf_reliability_comparison_v3",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

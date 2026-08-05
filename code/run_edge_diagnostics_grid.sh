@@ -85,6 +85,9 @@ Optional variables:
   RELIABILITY_STRUCTURE_Q low-structure quantile (default: 0.20)
   RELIABILITY_STRUCTURE_WEIGHT soft structural rank weight (default: 0.95)
   RELIABILITY_MIN_WEIGHT  minimum soft propagation weight (default: 0.10)
+  RELIABILITY_FILTER_EPOCH filtering epoch for hard_structure_momentum
+                          (default: 15)
+  RELIABILITY_MOMENTUM_DECAY stable EMA decay (default: 0.90)
 
 Prepared additive split layout:
   NOISE_DATA_ROOT/DATASET/noise_RATIO/seed_SEED/train.txt
@@ -135,6 +138,8 @@ reliability_momentum_q="${RELIABILITY_MOMENTUM_Q:-0.80}"
 reliability_structure_q="${RELIABILITY_STRUCTURE_Q:-0.20}"
 reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
+reliability_filter_epoch="${RELIABILITY_FILTER_EPOCH:-15}"
+reliability_momentum_decay="${RELIABILITY_MOMENTUM_DECAY:-0.90}"
 
 for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis summary_only keep_edge_labels keep_generated_train; do
   value="${!binary_flag}"
@@ -147,8 +152,14 @@ if [[ "$edge_filter_mode" != "current" && "$edge_filter_mode" != "none" && \
       "$edge_filter_mode" != "hard_consensus" && \
       "$edge_filter_mode" != "hard_structure_only" && \
       "$edge_filter_mode" != "soft_reliability" && \
-      "$edge_filter_mode" != "gated_soft_reliability" ]]; then
+      "$edge_filter_mode" != "gated_soft_reliability" && \
+      "$edge_filter_mode" != "hard_structure_momentum" ]]; then
   echo "Unsupported EDGE_FILTER_MODE: $edge_filter_mode" >&2
+  exit 2
+fi
+if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
+   [[ "$reliability_filter_epoch" -lt 2 ]]; then
+  echo "RELIABILITY_FILTER_EPOCH must be an integer >= 2." >&2
   exit 2
 fi
 if [[ -z "$output_root" ]]; then
@@ -177,6 +188,11 @@ fi
 if [[ -n "$train_patience" ]] && \
    { ! [[ "$train_patience" =~ ^[0-9]+$ ]] || [[ "$train_patience" -lt 1 ]]; }; then
   echo "TRAIN_PATIENCE must be a positive integer when provided." >&2
+  exit 2
+fi
+if [[ "$edge_filter_mode" == "hard_structure_momentum" && \
+      -n "$train_epochs" && "$reliability_filter_epoch" -gt "$train_epochs" ]]; then
+  echo "RELIABILITY_FILTER_EPOCH cannot exceed TRAIN_EPOCHS." >&2
   exit 2
 fi
 if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]; then
@@ -497,6 +513,7 @@ echo "  seeds:      $seeds"
 echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
+echo "  reliability filter epoch: $reliability_filter_epoch"
 echo "  summary only: $summary_only"
 echo "  dry run:    $dry_run"
 
@@ -519,6 +536,9 @@ for ratio in $noise_ratios; do
     fi
     if [[ "$edge_filter_mode" != "current" ]]; then
       run_name="${edge_filter_mode}_${run_name}"
+    fi
+    if [[ "$edge_filter_mode" == "hard_structure_momentum" ]]; then
+      run_name="${run_name}_filter_${reliability_filter_epoch}"
     fi
     run_dir="${output_root%/}/$dataset/$run_name"
     noise_type="prepared_additive_nonedge"
@@ -603,6 +623,8 @@ for ratio in $noise_ratios; do
         --edge-reliability-structure-quantile "$reliability_structure_q"
         --edge-reliability-structure-weight "$reliability_structure_weight"
         --edge-reliability-min-weight "$reliability_min_weight"
+        --edge-reliability-filtering-epoch "$reliability_filter_epoch"
+        --edge-reliability-momentum-decay "$reliability_momentum_decay"
       )
     else
       command+=(
@@ -635,6 +657,8 @@ for ratio in $noise_ratios; do
       echo "stop_after_filter=$stop_after_filter"
       echo "replacement_selection=$replacement_selection"
       echo "edge_filter_mode=$edge_filter_mode"
+      echo "reliability_filter_epoch=$reliability_filter_epoch"
+      echo "reliability_momentum_decay=$reliability_momentum_decay"
       echo "summary_only=$summary_only"
       echo "keep_edge_labels=$keep_edge_labels"
       echo "keep_generated_train=$keep_generated_train"
