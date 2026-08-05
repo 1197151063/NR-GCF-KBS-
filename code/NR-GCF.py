@@ -155,6 +155,55 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             momentum_loss[momentum_loss > config['beta']] = 0
             retained_edge_mask = momentum_loss > 0
             filtered_train_edge_index = train_edge_index[:, retained_edge_mask]
+            if world.args.export_edge_reliability_summary:
+                from edge_reliability import (
+                    build_reliability_policy,
+                    write_reliability_summary,
+                )
+                current_policy = build_reliability_policy(
+                    edge_index=train_edge_index,
+                    raw_momentum=model.momentum_loss.detach().clone(),
+                    num_users=num_users,
+                    num_items=num_items,
+                    mode='none',
+                    topk=world.args.edge_diagnostics_topk,
+                    chunk_size=world.args.edge_diagnostics_chunk_size,
+                    min_degree=world.args.edge_diagnostics_min_degree,
+                    momentum_quantile=world.args.edge_reliability_momentum_quantile,
+                    structure_quantile=world.args.edge_reliability_structure_quantile,
+                    structure_weight=world.args.edge_reliability_structure_weight,
+                    minimum_weight=world.args.edge_reliability_min_weight,
+                )
+                current_policy['mode'] = 'current'
+                current_policy['retained_mask'] = (
+                    retained_edge_mask.detach().to(device='cpu')
+                )
+                current_policy['propagation_weight'] = (
+                    current_policy['retained_mask'].to(torch.float32)
+                )
+                current_policy['decision'] = {
+                    'mode': 'current',
+                    'rule': 'exact current NR-GCF min-max score, values above beta set to zero, retain post-threshold score > 0',
+                    'beta': float(config['beta']),
+                    'raw_momentum_min': float(x_min.detach().cpu().item()),
+                    'raw_momentum_max': float(x_max.detach().cpu().item()),
+                    'uses_synthetic_labels': False,
+                }
+                repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                write_reliability_summary(
+                    output_dir=world.args.edge_reliability_dir,
+                    policy=current_policy,
+                    dataset=world.config['dataset'],
+                    seed=world.seed,
+                    requested_noise_ratio=world.args.requested_noise_ratio,
+                    filtering_epoch=epoch,
+                    labels_path=world.args.edge_reliability_labels_file,
+                    noise_validation_path=(
+                        world.args.edge_reliability_noise_validation_file
+                    ),
+                    repo_dir=repo_dir,
+                )
+                del current_policy
             if edge_loss_history is not None:
                 from edge_diagnostics import (
                     DiagnosticsInvarianceGuard,
@@ -262,7 +311,8 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 repo_dir=repo_dir,
             )
 
-            if world.args.edge_filter_mode == 'hard_consensus':
+            if world.args.edge_filter_mode in (
+                    'hard_consensus', 'hard_structure_only'):
                 retained_edge_mask = policy['retained_mask'].to(
                     device=train_edge_index.device
                 )
@@ -274,13 +324,14 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 )
                 train_edge_index = filtered_train_edge_index
                 print_log(
-                    'Stage-two hard_consensus applied: '
+                    f'Stage-two {world.args.edge_filter_mode} applied: '
                     f'{train_edge_index.size(1)} retained edges; ordinary BPR '
                     'sampling and propagation use the same hard-filtered graph.'
                 )
                 del retained_edge_mask
                 del filtered_train_edge_index
-            elif world.args.edge_filter_mode == 'soft_reliability':
+            elif world.args.edge_filter_mode in (
+                    'soft_reliability', 'gated_soft_reliability'):
                 propagation_weight = policy['propagation_weight'].to(
                     device=train_edge_index.device,
                     dtype=model.user_embedding.weight.dtype,
@@ -289,7 +340,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     train_edge_index, edge_weight=propagation_weight
                 )
                 print_log(
-                    'Stage-two soft_reliability applied: all positive edges '
+                    f'Stage-two {world.args.edge_filter_mode} applied: all positive edges '
                     'remain uniformly sampled by the original BPR objective; '
                     'frozen reliability weights affect propagation only.'
                 )
@@ -323,7 +374,8 @@ for epoch in range(1, world.TRAIN_epochs + 1):
     print_log(f'Epoch: {epoch:03d}, aver_loss : {loss:.5f}, R@20: '
             f'{recall[20]:.4f}, N@20: {ndcg[20]:.4f}, '
             f'time:{end_time-start_time:.2f} seconds')
-if world.args.edge_filter_mode != 'current':
+if (world.args.edge_filter_mode != 'current'
+        or world.args.export_edge_reliability_summary):
     from edge_reliability import write_training_summary
     write_training_summary(
         output_dir=world.args.edge_reliability_dir,

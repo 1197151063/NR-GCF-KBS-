@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v1"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v2"
 
 
 def _require_torch():
@@ -211,6 +211,46 @@ def _available_side_mean(user_side, item_side):
     return result, count
 
 
+def _structure_only_retained_mask(structure, protected, target_remove_count):
+    """Remove the lowest-structure eligible edges with stable edge-ID ties."""
+    structure = np.asarray(structure, dtype=np.float64)
+    protected = np.asarray(protected, dtype=bool)
+    target_remove_count = int(target_remove_count)
+    if target_remove_count < 0:
+        raise ValueError("target_remove_count cannot be negative")
+    eligible = np.isfinite(structure) & ~protected
+    eligible_ids = np.flatnonzero(eligible)
+    if target_remove_count > eligible_ids.size:
+        raise ValueError(
+            "Not enough finite, unprotected structural scores for matched filtering"
+        )
+    retained = np.ones(structure.size, dtype=bool)
+    if target_remove_count == 0:
+        return retained
+    order = np.lexsort((eligible_ids, structure[eligible_ids]))
+    removed_ids = eligible_ids[order[:target_remove_count]]
+    retained[removed_ids] = False
+    return retained
+
+
+def _gated_soft_risk(momentum_rank, structure_rank,
+                     momentum_quantile, structure_quantile):
+    """Continuous risk restricted to the hard-consensus tail quadrant."""
+    momentum_rank = np.asarray(momentum_rank, dtype=np.float64)
+    structure_rank = np.asarray(structure_rank, dtype=np.float64)
+    momentum_denominator = max(1.0 - float(momentum_quantile), 1e-12)
+    structure_denominator = max(float(structure_quantile), 1e-12)
+    momentum_tail = np.clip(
+        (momentum_rank - float(momentum_quantile)) / momentum_denominator,
+        0.0, 1.0,
+    )
+    structure_tail = np.clip(
+        (float(structure_quantile) - structure_rank) / structure_denominator,
+        0.0, 1.0,
+    )
+    return np.sqrt(momentum_tail * structure_tail)
+
+
 @torch.no_grad() if torch is not None else (lambda function: function)
 def build_reliability_policy(
         edge_index, raw_momentum, num_users, num_items, mode, topk,
@@ -218,7 +258,9 @@ def build_reliability_policy(
         structure_weight, minimum_weight):
     """Compute a frozen epoch-15 policy without reading evaluation labels."""
     _require_torch()
-    if mode not in ("none", "hard_consensus", "soft_reliability"):
+    if mode not in (
+            "none", "hard_consensus", "hard_structure_only",
+            "soft_reliability", "gated_soft_reliability"):
         raise ValueError("Unsupported reliability mode: %s" % mode)
     for name, value in (
             ("momentum_quantile", momentum_quantile),
@@ -297,11 +339,24 @@ def build_reliability_policy(
         if structure_threshold is not None else np.zeros(edge_count, dtype=bool)
     )
     consensus_candidate = high_momentum & low_structure
+    consensus_remove_count = int((consensus_candidate & ~protected).sum())
 
     retained = np.ones(edge_count, dtype=bool)
     propagation_weight = np.ones(edge_count, dtype=np.float32)
+    gated_risk = _gated_soft_risk(
+        momentum_rank, structure_rank,
+        momentum_quantile=momentum_quantile,
+        structure_quantile=structure_quantile,
+    )
     if mode == "hard_consensus":
         retained = ~(consensus_candidate & ~protected)
+        propagation_weight = retained.astype(np.float32)
+    elif mode == "hard_structure_only":
+        retained = _structure_only_retained_mask(
+            structure=structure,
+            protected=protected,
+            target_remove_count=consensus_remove_count,
+        )
         propagation_weight = retained.astype(np.float32)
     elif mode == "soft_reliability":
         scorable = np.isfinite(reliability)
@@ -311,6 +366,39 @@ def build_reliability_policy(
         ).astype(np.float32)
         # Unscorable and vulnerable long-tail edges receive full weight.
         propagation_weight[~scorable | protected] = 1.0
+    elif mode == "gated_soft_reliability":
+        scorable = np.isfinite(gated_risk)
+        propagation_weight[scorable] = (
+            1.0 - (1.0 - float(minimum_weight)) * gated_risk[scorable]
+        ).astype(np.float32)
+        # Only the high-momentum/low-structure tail is attenuated.  All other,
+        # unscorable, and long-tail-protected edges keep unit propagation weight.
+        propagation_weight[~scorable | protected] = 1.0
+
+    decision = {
+        "mode": mode,
+        "frozen_at_filter_epoch": True,
+        "uses_synthetic_labels": False,
+    }
+    if mode == "hard_consensus":
+        decision.update({
+            "rule": "high_raw_momentum AND low_structure AND not degree_protected",
+            "target_remove_count": consensus_remove_count,
+        })
+    elif mode == "hard_structure_only":
+        decision.update({
+            "rule": "lowest_structure among finite unprotected edges",
+            "matched_to": "hard_consensus removal count on the same epoch-15 graph",
+            "target_remove_count": consensus_remove_count,
+            "actual_remove_count": int((~retained).sum()),
+            "tie_break": "ascending stable edge_id",
+        })
+    elif mode == "gated_soft_reliability":
+        decision.update({
+            "rule": "unit weight outside consensus tail; smooth risk weight inside",
+            "bpr_positive_sampling": "all edges, uniform",
+            "edge_weight_scope": "LightGCN propagation only",
+        })
 
     return {
         "mode": mode,
@@ -325,12 +413,15 @@ def build_reliability_policy(
         "valid_side_count": valid_side_count,
         "structure_rank": structure_rank,
         "reliability": reliability,
+        "gated_soft_risk": gated_risk,
         "protected": protected,
         "consensus_candidate": consensus_candidate,
+        "consensus_remove_count_after_protection": consensus_remove_count,
         "user_degree": user_degree,
         "item_degree": item_degree,
         "momentum_threshold": momentum_threshold,
         "structure_threshold": structure_threshold,
+        "decision": decision,
         "parameters": {
             "topk": int(topk),
             "chunk_size": int(chunk_size),
@@ -373,21 +464,29 @@ def write_reliability_summary(
         "protected_edge_count": int(protected.sum()),
         "consensus_candidate_count_before_protection": int(consensus.sum()),
         "consensus_candidate_protected_count": int((consensus & protected).sum()),
+        "consensus_remove_count_after_protection": int(
+            policy["consensus_remove_count_after_protection"]
+        ),
         "thresholds": {
             "raw_momentum_high": policy["momentum_threshold"],
             "available_side_structure_low": policy["structure_threshold"],
         },
         "parameters": policy["parameters"],
+        "decision": policy.get("decision"),
         "policies": {
             "none": "All training edges remain unweighted.",
+            "current": "Exact current-code min-max/beta filtering; compact reporting does not alter the decision.",
             "hard_consensus": "Remove only high-momentum AND low-structure edges unless removal would make either endpoint degree fall below min_degree.",
+            "hard_structure_only": "Remove the same number as protected hard_consensus, selecting only the lowest-structure finite unprotected edges with edge_id tie-breaking.",
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
+            "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
             "representation_modulation": "Existing NR-GCF cross_norm path is unchanged; no new stage-two norm is added.",
         },
         "feature_definitions": {
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
             "reliability": "structure_weight * percentile_rank(structure) + (1-structure_weight) * (1-percentile_rank(raw_runtime_momentum)).",
+            "gated_soft_risk": "sqrt(clip((momentum_rank-q_m)/(1-q_m),0,1) * clip((q_s-structure_rank)/q_s,0,1)); exactly zero outside the consensus tail.",
             "protection": "user_degree_after_if_removed < min_degree OR item_degree_after_if_removed < min_degree.",
             "label_usage": "Synthetic labels are loaded only after the frozen decision and are used only below for evaluation statistics.",
         },
@@ -397,6 +496,7 @@ def write_reliability_summary(
             "item_side_structure": _stats(policy["item_side_structure"]),
             "available_side_structure": _stats(structure),
             "reliability": _stats(reliability),
+            "gated_soft_risk": _stats(policy["gated_soft_risk"]),
             "propagation_weight": _stats(weights),
             "user_degree": _stats(policy["user_degree"]),
             "item_degree": _stats(policy["item_degree"]),
@@ -430,18 +530,23 @@ def write_reliability_summary(
                 "raw_runtime_momentum": _binary_metrics(labels, momentum, True),
                 "available_side_structure": _binary_metrics(labels, structure, False),
                 "reliability": _binary_metrics(labels, reliability, False),
+                "gated_soft_risk": _binary_metrics(
+                    labels, policy["gated_soft_risk"], True
+                ),
                 "propagation_weight": _binary_metrics(labels, weights, False),
             },
             "clean_group": {
                 "momentum": _stats(momentum, clean),
                 "structure": _stats(structure, clean),
                 "reliability": _stats(reliability, clean),
+                "gated_soft_risk": _stats(policy["gated_soft_risk"], clean),
                 "propagation_weight": _stats(weights, clean),
             },
             "noisy_group": {
                 "momentum": _stats(momentum, noisy),
                 "structure": _stats(structure, noisy),
                 "reliability": _stats(reliability, noisy),
+                "gated_soft_risk": _stats(policy["gated_soft_risk"], noisy),
                 "propagation_weight": _stats(weights, noisy),
             },
         }

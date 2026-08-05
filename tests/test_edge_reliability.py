@@ -47,6 +47,30 @@ class EdgeReliabilityMathTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["auroc"], 1.0)
         self.assertAlmostEqual(metrics["average_precision"], 1.0)
 
+    def test_structure_only_matches_count_and_protects_edges(self):
+        retained = edge_reliability._structure_only_retained_mask(
+            structure=np.array([0.1, 0.1, 0.2, np.nan, 0.0]),
+            protected=np.array([False, False, False, False, True]),
+            target_remove_count=2,
+        )
+        # Equal scores are resolved by stable edge_id; protected edge 4 remains.
+        np.testing.assert_array_equal(
+            retained, np.array([False, False, True, True, True])
+        )
+
+    def test_gated_soft_risk_is_zero_outside_consensus_tail(self):
+        risk = edge_reliability._gated_soft_risk(
+            momentum_rank=np.array([0.7, 0.9, 1.0, 0.9]),
+            structure_rank=np.array([0.1, 0.3, 0.0, 0.1]),
+            momentum_quantile=0.8,
+            structure_quantile=0.2,
+        )
+        self.assertEqual(float(risk[0]), 0.0)
+        self.assertEqual(float(risk[1]), 0.0)
+        self.assertEqual(float(risk[2]), 1.0)
+        self.assertGreater(float(risk[3]), 0.0)
+        self.assertLess(float(risk[3]), 1.0)
+
 
 @unittest.skipUnless(
     edge_reliability is not None and edge_reliability.torch is not None,

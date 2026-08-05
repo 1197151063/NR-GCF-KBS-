@@ -55,9 +55,11 @@ def summarize(root):
             "structure_auprc": _metric(evaluation, "available_side_structure", "average_precision"),
             "reliability_auroc": _metric(evaluation, "reliability", "auroc"),
             "reliability_auprc": _metric(evaluation, "reliability", "average_precision"),
+            "gated_soft_risk_auroc": _metric(evaluation, "gated_soft_risk", "auroc"),
+            "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v1",
+        "schema_version": "nrgcf_reliability_comparison_v2",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

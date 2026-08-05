@@ -65,8 +65,12 @@ def parse_args():
                         help='metadata only; does not inject noise or assert an actual noise ratio')
 
     parser.add_argument('--edge-filter-mode', type=str, default='current',
-                        choices=['current', 'none', 'hard_consensus', 'soft_reliability'],
+                        choices=['current', 'none', 'hard_consensus',
+                                 'hard_structure_only', 'soft_reliability',
+                                 'gated_soft_reliability'],
                         help='epoch-15 graph policy; current preserves the original NR-GCF implementation')
+    parser.add_argument('--export-edge-reliability-summary', action='store_true',
+                        help='write compact JSON policy statistics without a per-edge table')
     parser.add_argument('--edge-reliability-dir', type=str, default='edge_reliability',
                         help='compact JSON output directory for none/hard/soft reliability comparisons')
     parser.add_argument('--edge-reliability-labels-file', type=str, default=None,

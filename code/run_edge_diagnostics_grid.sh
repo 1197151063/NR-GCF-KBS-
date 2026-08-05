@@ -74,10 +74,11 @@ Optional variables:
   TRAIN_EPOCHS            optional total epoch override, e.g. 17 for two
                           post-filter smoke epochs (default: entry default)
   TRAIN_PATIENCE          optional early-stopping patience override
-  EDGE_FILTER_MODE        current, none, hard_consensus, or soft_reliability
+  EDGE_FILTER_MODE        current, none, hard_consensus, hard_structure_only,
+                          soft_reliability, or gated_soft_reliability
                           (default: current)
   SUMMARY_ONLY            1: write compact reliability JSON and no per-edge
-                          CSV/Parquet; requires a non-current mode (default: 0)
+                          CSV/Parquet (default: 0)
   KEEP_EDGE_LABELS        retain the temporary synthetic-label CSV (default: 1)
   KEEP_GENERATED_TRAIN    retain generated_train.txt after the run (default: 1)
   RELIABILITY_MOMENTUM_Q  high-momentum quantile (default: 0.80)
@@ -144,12 +145,10 @@ for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analys
 done
 if [[ "$edge_filter_mode" != "current" && "$edge_filter_mode" != "none" && \
       "$edge_filter_mode" != "hard_consensus" && \
-      "$edge_filter_mode" != "soft_reliability" ]]; then
-  echo "EDGE_FILTER_MODE must be current, none, hard_consensus, or soft_reliability." >&2
-  exit 2
-fi
-if [[ "$summary_only" == "1" && "$edge_filter_mode" == "current" ]]; then
-  echo "SUMMARY_ONLY=1 requires EDGE_FILTER_MODE=none, hard_consensus, or soft_reliability." >&2
+      "$edge_filter_mode" != "hard_structure_only" && \
+      "$edge_filter_mode" != "soft_reliability" && \
+      "$edge_filter_mode" != "gated_soft_reliability" ]]; then
+  echo "Unsupported EDGE_FILTER_MODE: $edge_filter_mode" >&2
   exit 2
 fi
 if [[ -z "$output_root" ]]; then
@@ -596,6 +595,7 @@ for ratio in $noise_ratios; do
     )
     if [[ "$summary_only" == "1" ]]; then
       command+=(
+        --export-edge-reliability-summary
         --edge-reliability-dir "$run_dir/edge_reliability"
         --edge-reliability-labels-file "$run_dir/synthetic_edge_labels.csv"
         --edge-reliability-noise-validation-file "$run_dir/noise_validation.json"
