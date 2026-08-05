@@ -73,6 +73,17 @@ Optional variables:
   RUN_PILOT_ANALYSIS      write pilot_analysis.json after export (default: 1)
   TRAIN_EPOCHS            optional total epoch override, e.g. 17 for two
                           post-filter smoke epochs (default: entry default)
+  TRAIN_PATIENCE          optional early-stopping patience override
+  EDGE_FILTER_MODE        current, none, hard_consensus, or soft_reliability
+                          (default: current)
+  SUMMARY_ONLY            1: write compact reliability JSON and no per-edge
+                          CSV/Parquet; requires a non-current mode (default: 0)
+  KEEP_EDGE_LABELS        retain the temporary synthetic-label CSV (default: 1)
+  KEEP_GENERATED_TRAIN    retain generated_train.txt after the run (default: 1)
+  RELIABILITY_MOMENTUM_Q  high-momentum quantile (default: 0.80)
+  RELIABILITY_STRUCTURE_Q low-structure quantile (default: 0.20)
+  RELIABILITY_STRUCTURE_WEIGHT soft structural rank weight (default: 0.95)
+  RELIABILITY_MIN_WEIGHT  minimum soft propagation weight (default: 0.10)
 
 Prepared additive split layout:
   NOISE_DATA_ROOT/DATASET/noise_RATIO/seed_SEED/train.txt
@@ -114,14 +125,33 @@ hard_candidate_pool="${HARD_CANDIDATE_POOL:-8}"
 hard_support_limit="${HARD_SUPPORT_LIMIT:-16}"
 run_pilot_analysis="${RUN_PILOT_ANALYSIS:-1}"
 train_epochs="${TRAIN_EPOCHS:-}"
+train_patience="${TRAIN_PATIENCE:-}"
+edge_filter_mode="${EDGE_FILTER_MODE:-current}"
+summary_only="${SUMMARY_ONLY:-0}"
+keep_edge_labels="${KEEP_EDGE_LABELS:-1}"
+keep_generated_train="${KEEP_GENERATED_TRAIN:-1}"
+reliability_momentum_q="${RELIABILITY_MOMENTUM_Q:-0.80}"
+reliability_structure_q="${RELIABILITY_STRUCTURE_Q:-0.20}"
+reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
+reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
 
-for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis; do
+for binary_flag in stop_after_filter require_clean_repo dry_run run_pilot_analysis summary_only keep_edge_labels keep_generated_train; do
   value="${!binary_flag}"
   if [[ "$value" != "0" && "$value" != "1" ]]; then
     echo "${binary_flag^^} must be 0 or 1 (got: $value)" >&2
     exit 2
   fi
 done
+if [[ "$edge_filter_mode" != "current" && "$edge_filter_mode" != "none" && \
+      "$edge_filter_mode" != "hard_consensus" && \
+      "$edge_filter_mode" != "soft_reliability" ]]; then
+  echo "EDGE_FILTER_MODE must be current, none, hard_consensus, or soft_reliability." >&2
+  exit 2
+fi
+if [[ "$summary_only" == "1" && "$edge_filter_mode" == "current" ]]; then
+  echo "SUMMARY_ONLY=1 requires EDGE_FILTER_MODE=none, hard_consensus, or soft_reliability." >&2
+  exit 2
+fi
 if [[ -z "$output_root" ]]; then
   echo "OUTPUT_ROOT is required." >&2
   exit 2
@@ -143,6 +173,11 @@ fi
 if [[ -n "$train_epochs" ]] && \
    { ! [[ "$train_epochs" =~ ^[0-9]+$ ]] || [[ "$train_epochs" -lt 15 ]]; }; then
   echo "TRAIN_EPOCHS must be an integer >= 15 when provided." >&2
+  exit 2
+fi
+if [[ -n "$train_patience" ]] && \
+   { ! [[ "$train_patience" =~ ^[0-9]+$ ]] || [[ "$train_patience" -lt 1 ]]; }; then
+  echo "TRAIN_PATIENCE must be a positive integer when provided." >&2
   exit 2
 fi
 if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]; then
@@ -462,6 +497,8 @@ echo "  ratios:     $noise_ratios"
 echo "  seeds:      $seeds"
 echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
+echo "  edge filter: $edge_filter_mode"
+echo "  summary only: $summary_only"
 echo "  dry run:    $dry_run"
 
 for ratio in $noise_ratios; do
@@ -480,6 +517,9 @@ for ratio in $noise_ratios; do
       fi
     else
       run_name="noise_${tag}_seed_${seed}"
+    fi
+    if [[ "$edge_filter_mode" != "current" ]]; then
+      run_name="${edge_filter_mode}_${run_name}"
     fi
     run_dir="${output_root%/}/$dataset/$run_name"
     noise_type="prepared_additive_nonedge"
@@ -548,22 +588,40 @@ for ratio in $noise_ratios; do
       --dataset "$dataset"
       --seed "$seed"
       --requested-noise-ratio "$ratio"
-      --export-edge-diagnostics
-      --edge-diagnostics-dir "$run_dir/edge_diagnostics"
-      --edge-diagnostics-format "$diagnostics_format"
+      --edge-filter-mode "$edge_filter_mode"
       --edge-diagnostics-structural-mode "$structural_mode"
       --edge-diagnostics-topk "$topk"
       --edge-diagnostics-chunk-size "$chunk_size"
       --edge-diagnostics-min-degree "$min_degree"
-      --edge-diagnostics-verify-invariance
-      --edge-diagnostics-labels-file "$run_dir/synthetic_edge_labels.csv"
-      --edge-diagnostics-noise-validation-file "$run_dir/noise_validation.json"
     )
+    if [[ "$summary_only" == "1" ]]; then
+      command+=(
+        --edge-reliability-dir "$run_dir/edge_reliability"
+        --edge-reliability-labels-file "$run_dir/synthetic_edge_labels.csv"
+        --edge-reliability-noise-validation-file "$run_dir/noise_validation.json"
+        --edge-reliability-momentum-quantile "$reliability_momentum_q"
+        --edge-reliability-structure-quantile "$reliability_structure_q"
+        --edge-reliability-structure-weight "$reliability_structure_weight"
+        --edge-reliability-min-weight "$reliability_min_weight"
+      )
+    else
+      command+=(
+        --export-edge-diagnostics
+        --edge-diagnostics-dir "$run_dir/edge_diagnostics"
+        --edge-diagnostics-format "$diagnostics_format"
+        --edge-diagnostics-verify-invariance
+        --edge-diagnostics-labels-file "$run_dir/synthetic_edge_labels.csv"
+        --edge-diagnostics-noise-validation-file "$run_dir/noise_validation.json"
+      )
+    fi
     if [[ "$stop_after_filter" == "1" ]]; then
       command+=(--edge-diagnostics-stop-after-filter)
     fi
     if [[ -n "$train_epochs" ]]; then
       command+=(--epochs "$train_epochs")
+    fi
+    if [[ -n "$train_patience" ]]; then
+      command+=(--patience "$train_patience")
     fi
 
     {
@@ -576,9 +634,14 @@ for ratio in $noise_ratios; do
       echo "gpu_id=$gpu_id"
       echo "stop_after_filter=$stop_after_filter"
       echo "replacement_selection=$replacement_selection"
+      echo "edge_filter_mode=$edge_filter_mode"
+      echo "summary_only=$summary_only"
+      echo "keep_edge_labels=$keep_edge_labels"
+      echo "keep_generated_train=$keep_generated_train"
       echo "hard_candidate_pool=$hard_candidate_pool"
       echo "hard_support_limit=$hard_support_limit"
       echo "train_epochs=${train_epochs:-entry_default}"
+      echo "train_patience=${train_patience:-entry_default}"
       printf 'command='
       printf '%q ' "${command[@]}"
       printf '\n'
@@ -592,13 +655,21 @@ for ratio in $noise_ratios; do
       "${command[@]}"
     ) 2>&1 | tee "$run_dir/training.log"
 
-    if [[ "$run_pilot_analysis" == "1" ]]; then
+    if [[ "$run_pilot_analysis" == "1" && "$summary_only" == "0" ]]; then
       python3 "$script_dir/analyze_edge_diagnostics.py" \
         --diagnostics-dir "$run_dir/edge_diagnostics" \
         --labels "$run_dir/synthetic_edge_labels.csv" \
         --noise-validation "$run_dir/noise_validation.json" \
         --output "$run_dir/pilot_analysis.json" \
         2>&1 | tee "$run_dir/pilot_analysis.log"
+    fi
+
+    if [[ "$summary_only" == "1" && "$keep_edge_labels" == "0" ]]; then
+      rm -f -- "$run_dir/synthetic_edge_labels.csv"
+    fi
+    if [[ "$keep_generated_train" == "0" && \
+          "$variant_train" == "$run_dir/generated_train.txt" ]]; then
+      rm -f -- "$run_dir/generated_train.txt"
     fi
 
     git -C "$repo_root" worktree remove --force "$active_worktree"

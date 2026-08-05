@@ -64,4 +64,22 @@ def parse_args():
     parser.add_argument('--requested-noise-ratio', type=float, default=None,
                         help='metadata only; does not inject noise or assert an actual noise ratio')
 
+    parser.add_argument('--edge-filter-mode', type=str, default='current',
+                        choices=['current', 'none', 'hard_consensus', 'soft_reliability'],
+                        help='epoch-15 graph policy; current preserves the original NR-GCF implementation')
+    parser.add_argument('--edge-reliability-dir', type=str, default='edge_reliability',
+                        help='compact JSON output directory for none/hard/soft reliability comparisons')
+    parser.add_argument('--edge-reliability-labels-file', type=str, default=None,
+                        help='optional ordered synthetic-label CSV used only for compact post-decision statistics')
+    parser.add_argument('--edge-reliability-noise-validation-file', type=str, default=None,
+                        help='optional validated noise metadata JSON copied into compact reliability provenance')
+    parser.add_argument('--edge-reliability-momentum-quantile', type=float, default=0.80,
+                        help='hard consensus high-momentum percentile threshold')
+    parser.add_argument('--edge-reliability-structure-quantile', type=float, default=0.20,
+                        help='hard consensus low-structure percentile threshold')
+    parser.add_argument('--edge-reliability-structure-weight', type=float, default=0.95,
+                        help='diagnostic soft reliability weight assigned to structural percentile rank')
+    parser.add_argument('--edge-reliability-min-weight', type=float, default=0.10,
+                        help='minimum propagation weight in soft reliability mode')
+
     return parser.parse_args()

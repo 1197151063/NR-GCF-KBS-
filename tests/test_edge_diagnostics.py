@@ -315,6 +315,7 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
         self.assertEqual(args.edge_diagnostics_structural_mode, "two_hop_minhash")
         self.assertEqual(args.edge_diagnostics_chunk_size, 8192)
         self.assertIsNone(args.edge_diagnostics_labels_file)
+        self.assertEqual(args.edge_filter_mode, "current")
 
         with mock.patch.object(sys, "argv", [
             "NR-GCF.py",
@@ -322,12 +323,16 @@ class EdgeDiagnosticsReferenceTest(unittest.TestCase):
             "--edge-diagnostics-format", "csv",
             "--edge-diagnostics-topk", "7",
             "--edge-diagnostics-chunk-size", "128",
+            "--edge-filter-mode", "hard_consensus",
+            "--edge-reliability-min-weight", "0.2",
         ]):
             configured = parse.parse_args()
         self.assertTrue(configured.export_edge_diagnostics)
         self.assertEqual(configured.edge_diagnostics_format, "csv")
         self.assertEqual(configured.edge_diagnostics_topk, 7)
         self.assertEqual(configured.edge_diagnostics_chunk_size, 128)
+        self.assertEqual(configured.edge_filter_mode, "hard_consensus")
+        self.assertEqual(configured.edge_reliability_min_weight, 0.2)
 
 
 if __name__ == "__main__":
