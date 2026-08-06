@@ -19,9 +19,11 @@ AI_MEMORY 下其余 Markdown。以这些文件和当前 Git HEAD 的真实代码
 4. 不在本地运行完整训练；
 5. 不覆盖或重构无关代码。
 
-当前最高优先级是验证 adaptive filtering timing，比较 original_always 与
-reliability_weighted_always 的实际触发 epoch、coverage、removed-set Jaccard、
-overall best、best post-filter、final result、过滤边集合和逐层 RMS trace。
+当前最高优先级是审阅 outputs_v1.7 的三组 early-timing 对照：no filtering +
+original_always、early adaptive + original_always、early adaptive +
+reliability_weighted_always。比较实际触发 epoch、coverage、removed-set Jaccard、
+overall best、按 Recall@20 统计且包含触发当轮的 best post-filter、final result、
+过滤边集合和逐层 RMS trace。
 ```
 
 ## 新 session 首轮应回答的问题

@@ -133,15 +133,38 @@ T=20 相比 hard structure-only：
 
 该结果推动当前设计改为 always-on cross norm，但它不能证明第二阶段有效。
 
-## 下一轮 pending
+## outputs_v1.6：adaptive timing 与 always-on modulation
 
-预计目录：`outputs_v1.5`。
+Yelp2018，degree-preserving uniform replacement，seed 2026，lr=5e-4，
+init_weight=0.01。noise ratio 0 与 0.2 各比较 `original_always` 和
+`reliability_weighted_always`。四组都在 epoch 7 因 coverage=1.0、removed-set
+稳定而触发 filtering。
 
-- dataset：Yelp2018；
-- noise ratio：0、0.2；
-- seed：2026；
-- 当时使用 T=20；当前实现已改为 adaptive epoch 5–10；
-- epochs=100；
-- lr=5e-4；
-- init_weight=0.01；
-- 对照：`original_always`、`reliability_weighted_always`。
+20% noise 的过滤诊断：
+
+- 删除 139,716 条，占 11.29%；
+- noisy removal rate 45.14%，clean removal rate 2.83%；
+- removed precision 79.96%，过滤后残余 synthetic noise 约 12.37%；
+- fused risk AUROC/AUPRC：0.8958/0.7147；
+- structure AUROC/AUPRC：0.8923/0.6915；
+- stable momentum AUROC/AUPRC：0.8465/0.5353。
+
+性能观察：
+
+- clean overall best：original 0.066879/0.054839，weighted 0.066588/0.054535，均在 epoch 15；
+- 20% noise overall best：两组均为 0.055102/0.044913，发生在过滤前 epoch 4；
+- 过滤触发当轮 epoch 7，20% noise 下 original 为约 0.0521，weighted 为约 0.0538；clean 下 original 为约 0.0609，weighted 为约 0.0649；
+- epoch 8 后 original 很快追平，weighted 的优势目前只证明它能缓和图切换冲击，尚未证明长期收益。
+
+这一轮还暴露出两个关键问题：
+
+1. CrossNorm backbone 在 epoch 4 左右已达到 noisy best，epoch 7 filtering 偏晚；
+2. 当时代码的 `best_post_filter` 使用 `epoch > filtering_epoch` 且以 Recall+NDCG 选点，漏掉触发当轮并与全局 Recall@20 early stopping 不一致。v1.7 已修正为计入触发当轮、只按 Recall@20 选点。
+
+下一步不是扩大 seed，而是以 20% noise、seed 2026 做三组最小因果对照：
+
+- original always + no filtering；
+- original always + adaptive epoch 2–4 filtering；
+- reliability-weighted always + 同一 early adaptive filtering。
+
+此轮保持删除预算不变，避免同时改变 timing 和 budget。

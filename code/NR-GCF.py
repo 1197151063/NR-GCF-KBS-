@@ -685,8 +685,11 @@ for epoch in range(1, world.TRAIN_epochs + 1):
     modulation_snapshot = model.modulation_snapshot()
     modulation_snapshot['epoch'] = int(epoch)
     representation_modulation_trace.append(modulation_snapshot)
-    if epoch > active_filtering_epoch:
-        post_filter_score = recall[20] + ndcg[20]
+    # Filtering and any reliability-weighted modulation are installed before
+    # this epoch's evaluation.  Include the trigger epoch itself and use the
+    # same Recall@20 monitor as global early stopping.
+    if filtering_applied and epoch >= active_filtering_epoch:
+        post_filter_score = recall[20]
         if (best_post_filter_score is None
                 or post_filter_score > best_post_filter_score):
             best_post_filter_score = post_filter_score

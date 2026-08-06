@@ -60,6 +60,8 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
                 "best_epoch": 93,
                 "best_recall_at_20": 0.12,
                 "best_ndcg_at_20": 0.08,
+                "best_post_filter_monitor": "Recall@20",
+                "best_post_filter_includes_filtering_epoch": True,
                 "final_training_loss": 0.3,
             }), encoding="utf-8")
 
@@ -69,6 +71,12 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
             self.assertEqual(report["runs"][0]["reliability_auroc"], 0.8)
             self.assertEqual(report["runs"][0]["filtering_schedule"], "adaptive")
             self.assertEqual(report["runs"][0]["filtering_trigger_coverage"], 1.0)
+            self.assertEqual(
+                report["runs"][0]["best_post_filter_monitor"], "Recall@20"
+            )
+            self.assertTrue(
+                report["runs"][0]["best_post_filter_includes_filtering_epoch"]
+            )
 
 
 if __name__ == "__main__":

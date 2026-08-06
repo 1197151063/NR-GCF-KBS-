@@ -1,23 +1,24 @@
 # 未解决问题与下一步决策
 
-## 最高优先级：outputs_v1.5
+## 最高优先级：outputs_v1.7 early timing pilot
 
-等待验证：
+只验证 20% uniform degree-preserving replacement noise、seed 2026：
 
-- `original_always`
-- `reliability_weighted_always`
-- noise ratio 0 与 0.2
-- seed 2026
+- `original_always` + no filtering；
+- `original_always` + adaptive epoch 2–4 filtering；
+- `reliability_weighted_always` + 同一 early adaptive filtering。
 
 审阅顺序：
 
 1. commit、noise ratio、配置是否正确；
-2. 两组过滤前轨迹是否完全相同；
-3. removed edges 是否相同；
-4. weighted RMS 是否在过滤后实际不同；
-5. best post-filter 是否提高；
-6. adaptive filtering 实际在哪个 epoch 触发，overall best 是否发生在过滤后；
-7. final epoch 是否稳定而非偶然峰值。
+2. 三组过滤前轨迹是否完全相同；
+3. adaptive 是否在 epoch 3 左右触发，以及两个 filtering arm 的 removed edges 是否相同；
+4. filtering 相对 no-filter 是提升还是伤害；
+5. weighted RMS 是否在过滤后实际不同，能否减小触发当轮冲击；
+6. 修正后的 best post-filter Recall@20 是否提高；
+7. overall best 是否从过滤前移到过滤后，final epoch 是否稳定而非偶然峰值。
+
+本轮不改变删除预算。只有确认 early filtering 的方向后，才决定是否降低预算。
 
 ## 若 reliability-weighted always 有效
 

@@ -19,7 +19,23 @@ git rev-parse --short HEAD
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
-## 当前推荐实验
+## 当前推荐实验：outputs_v1.7
+
+只跑 20% replacement noise、seed 2026 的三组最小对照：
+
+```bash
+cd /root/cyj/NR-GCF-KBS-/code
+
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v1.7 \
+bash run_early_adaptive_filtering_v1_7.sh
+```
+
+三组分别为 no filtering + original always、early adaptive + original always、
+early adaptive + reliability-weighted always。默认 min epoch 2、max epoch 4、
+stable checks 1；不导出 per-edge CSV/Parquet。
+
+## 上一轮 representation modulation 实验
 
 一个 seed，clean 与 20% replacement noise，两种 always-on modulation：
 
@@ -28,7 +44,7 @@ cd /root/cyj/NR-GCF-KBS-/code
 
 GPU_ID=0 \
 NOISE_RATIOS="0 0.2" \
-OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v1.5 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v1.6 \
 bash run_representation_modulation_ablation_100e.sh
 ```
 

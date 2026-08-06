@@ -1,8 +1,8 @@
 """Compact, training-side edge reliability policies for NR-GCF pilots.
 
 The module is deliberately separate from the loss implementation.  It reads
-the epoch-15 momentum values and the pre-filter training graph, computes a
-deterministic structural score, and returns either a retained-edge mask or
+the filter-point momentum values and the pre-filter training graph, computes
+a deterministic structural score, and returns either a retained-edge mask or
 propagation-only edge weights.  Synthetic labels are read only after the
 decision has been made and are used exclusively for JSON summary statistics.
 """
@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v8"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v9"
 
 
 def _require_torch():
@@ -935,6 +935,12 @@ def write_training_summary(
         "best_epoch": int(best_epoch),
         "best_recall_at_20": float(best_recall),
         "best_ndcg_at_20": float(best_ndcg),
+        "best_post_filter_monitor": "Recall@20",
+        "best_post_filter_includes_filtering_epoch": True,
+        "best_post_filter_definition": (
+            "Maximum Recall@20 over evaluations performed after the filter "
+            "decision has been applied, including the filtering epoch itself."
+        ),
         "best_post_filter_epoch": (
             int(best_post_filter_epoch)
             if best_post_filter_epoch is not None else None

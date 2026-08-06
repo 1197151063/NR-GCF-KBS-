@@ -1,6 +1,6 @@
 # NR-GCF KBS 项目记忆入口
 
-- 最后更新：2026-08-05
+- 最后更新：2026-08-06
 - 模型代码基线：以当前 `main` HEAD 为准；AI_MEMORY 初始快照建立于 `b30a463` 之后。
 - 工作仓库：`https://github.com/1197151063/NR-GCF-KBS-.git`
 - 主要远程目录：`/root/cyj/NR-GCF-KBS-/code`
@@ -32,8 +32,10 @@
 - 当前代码主对照：`original_always` 与 `reliability_weighted_always`。
 - 当前代码严格采用用户指定的 direct cross norm；`lambda_` 在这些 NRGCF 模式中不参与 forward。
 - 所有训练入口使用全局 Recall@20 early stopping：连续 20 个 epoch 没有严格提升即停止。
-- 当前方法使用 training-only adaptive filtering timing：epoch 5 起检查，coverage 至少 0.99，removed-set Jaccard 至少 0.90 且连续稳定两次，最晚 epoch 10 强制过滤。
-- 下一轮实验尚未完成：`outputs_v1.5`，noise ratio `0` 和 `0.2`，seed `2026`。
+- `outputs_v1.6` 已完成：adaptive 规则在四组都于 epoch 7 触发；可靠性排序有效，但相对 CrossNorm 的快速峰值仍偏晚。
+- `reliability_weighted_always` 在过滤切换当轮显著减小性能冲击，但下一轮很快被 `original_always` 追平，尚不能声称它稳定提高最终性能。
+- 下一轮是最小 `outputs_v1.7` timing pilot：只跑 noise ratio `0.2`、seed `2026`，比较 no filtering、early adaptive + original、early adaptive + weighted。early adaptive 暂测 epoch 2–4、stable check 1；这不是已确定的最终超参数。
+- `training_summary.json` 的 post-filter best 从 v1.7 起按 Recall@20 选择，并计入 filtering 触发当轮；旧结果漏掉了触发当轮。
 
 ## 必须避免的误读
 

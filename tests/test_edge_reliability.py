@@ -21,6 +21,22 @@ else:
 
 @unittest.skipUnless(np is not None, "NumPy unavailable")
 class EdgeReliabilityMathTest(unittest.TestCase):
+    def test_early_pilot_triggers_after_one_stable_comparison(self):
+        trigger = edge_reliability.AdaptiveFilteringTrigger(
+            min_epoch=2,
+            max_epoch=4,
+            min_coverage=0.99,
+            jaccard_threshold=0.90,
+            stable_checks=1,
+        )
+        retained = np.array([False, True, True, False])
+        fired, _ = trigger.observe(2, 1.0, retained)
+        self.assertFalse(fired)
+        fired, row = trigger.observe(3, 1.0, retained)
+        self.assertTrue(fired)
+        self.assertEqual(row["trigger_reason"], "coverage_and_removed_set_stable")
+        self.assertEqual(trigger.trigger_epoch, 3)
+
     def test_adaptive_trigger_requires_two_stable_checks(self):
         trigger = edge_reliability.AdaptiveFilteringTrigger(
             min_epoch=5,

@@ -52,6 +52,10 @@ CrossNorm 从 epoch 1 始终开启，filtering 时点由 edge reliability readin
 
 二跳结构特征只计算一次并在 readiness checks 之间缓存。每轮 preview 不修改传播图、sampler、optimizer、参数或随机数状态。
 
+`outputs_v1.6` 中该规则在 epoch 7 触发，但 noisy overall best 已在 epoch 4。
+因此 `outputs_v1.7` 暂时测试更早的 min=2、max=4、stable checks=1。这个窗口
+只是一轮 timing pilot，不是当前已验证的最终方法配置；删除预算保持不变。
+
 ### Hard graph update
 
 删除后同时改变：
@@ -136,7 +140,7 @@ x = cross_norm(x)
 
 ## 当前尚不能声称的内容
 
-- 不能声称 reliability-weighted modulation 已经提高推荐性能；`outputs_v1.5` 尚未返回。
+- 不能声称 reliability-weighted modulation 已经提高最终推荐性能；`outputs_v1.6` 只显示它缓和 filtering 触发当轮的性能冲击，随后 original 很快追平。
 - 不能声称两个信号存在特定 Spearman 负相关，除非实际计算。
 - 不能声称论文 Eq.10 正确；实际采用的是用户指定/代码有效的 uncapped RMS。
 - 不能声称第二阶段贡献 overall best，必须看 best post-filter。
