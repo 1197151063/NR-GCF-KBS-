@@ -36,6 +36,7 @@ def summarize(root):
         adaptive_filtering = reliability.get("adaptive_filtering") or {}
         filtering_timing = training.get("filtering_timing") or {}
         early_stopping = training.get("early_stopping") or {}
+        parameters = reliability.get("parameters") or {}
         adaptive_trace = adaptive_filtering.get("trace") or []
         trigger_snapshot = adaptive_trace[-1] if adaptive_trace else {}
         runs.append({
@@ -58,6 +59,9 @@ def summarize(root):
                 "consecutive_stable_checks"
             ),
             "momentum_semantics": reliability.get("momentum_semantics"),
+            "momentum_quantile": parameters.get("momentum_quantile"),
+            "structure_quantile": parameters.get("structure_quantile"),
+            "structure_weight": parameters.get("structure_weight"),
             "representation_modulation_mode": representation_modulation.get("mode"),
             "representation_modulation_ramp_epochs": representation_modulation.get("ramp_epochs"),
             "representation_modulation_lambda": representation_modulation.get("lambda"),
@@ -108,7 +112,7 @@ def summarize(root):
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v7",
+        "schema_version": "nrgcf_reliability_comparison_v8",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

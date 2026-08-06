@@ -19,7 +19,20 @@ git rev-parse --short HEAD
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
-## 当前推荐实验：outputs_v1.7
+## 当前推荐实验：outputs_v1.8
+
+```bash
+cd /root/cyj/NR-GCF-KBS-/code
+
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v1.8 \
+bash run_clean_safety_and_momentum_ablation_v1_8.sh
+```
+
+只新增三个 run：clean no-filter、clean early fused filter、20% noise 下
+`structure_weight=1.0` 的同预算排序消融。v1.7 的 noisy 0.95 fused run 不重复。
+
+## 上一轮 early timing 实验：outputs_v1.7
 
 只跑 20% replacement noise、seed 2026 的三组最小对照：
 

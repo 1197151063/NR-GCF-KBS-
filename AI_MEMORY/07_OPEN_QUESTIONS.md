@@ -1,6 +1,18 @@
 # 未解决问题与下一步决策
 
-## 最高优先级：outputs_v1.7 early timing pilot
+## 最高优先级：outputs_v1.8 clean safety 与 momentum 排序消融
+
+只新增：
+
+- clean + no filtering；
+- clean + early fused filtering；
+- 20% noise + 同一 momentum-calibrated budget、`structure_weight=1.0` 排序。
+
+第三组需与 outputs_v1.7 的 20% noise、`structure_weight=0.95`、
+`original_always` 比较。若 0.95 稳定更好，才能把 5% momentum 写成推荐排序贡献；
+若两者相同或 1.0 更好，则 momentum 暂时只保留为删除预算校准信号。
+
+## 已完成：outputs_v1.7 early timing pilot
 
 只验证 20% uniform degree-preserving replacement noise、seed 2026：
 

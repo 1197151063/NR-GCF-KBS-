@@ -36,6 +36,8 @@
 - `reliability_weighted_always` 在过滤切换当轮显著减小性能冲击，但下一轮很快被 `original_always` 追平，尚不能声称它稳定提高最终性能。
 - 下一轮是最小 `outputs_v1.7` timing pilot：只跑 noise ratio `0.2`、seed `2026`，比较 no filtering、early adaptive + original、early adaptive + weighted。early adaptive 暂测 epoch 2–4、stable check 1；这不是已确定的最终超参数。
 - `training_summary.json` 的 post-filter best 从 v1.7 起按 Recall@20 选择，并计入 filtering 触发当轮；旧结果漏掉了触发当轮。
+- `outputs_v1.7` 已确认 early filter + original_always 相比 no-filter 提升 Recall 3.23%、NDCG 2.80%；weighted 略低于 original，不再作为主方法。
+- 下一轮 `outputs_v1.8` 只补 clean no-filter、clean early fused filter，以及 20% noise 下同预算 `structure_weight=1.0` 排序消融。
 
 ## 必须避免的误读
 

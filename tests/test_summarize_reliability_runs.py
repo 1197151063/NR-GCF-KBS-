@@ -24,6 +24,11 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
                 "mode": "soft_reliability",
                 "seed": 2026,
                 "requested_noise_ratio": 0.2,
+                "parameters": {
+                    "momentum_quantile": 0.8,
+                    "structure_quantile": 0.2,
+                    "structure_weight": 0.95,
+                },
                 "filtering_epoch": 7,
                 "adaptive_filtering": {
                     "schedule": "adaptive",
@@ -71,6 +76,7 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
             self.assertEqual(report["runs"][0]["reliability_auroc"], 0.8)
             self.assertEqual(report["runs"][0]["filtering_schedule"], "adaptive")
             self.assertEqual(report["runs"][0]["filtering_trigger_coverage"], 1.0)
+            self.assertEqual(report["runs"][0]["structure_weight"], 0.95)
             self.assertEqual(
                 report["runs"][0]["best_post_filter_monitor"], "Recall@20"
             )
