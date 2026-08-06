@@ -40,6 +40,9 @@
 - 下一轮 `outputs_v1.8` 只补 clean no-filter、clean early fused filter，以及 20% noise 下同预算 `structure_weight=1.0` 排序消融。
 - `outputs_v1.8` 已确认 clean early filtering 安全且有提升；20% noise 下 `structure_weight=1.0` 略优于 0.95，但单 seed 差距只有约 0.32% Recall。
 - 下一轮 `outputs_v1.9` 仅用 seed 2027 复核 0.95 与 1.0 两种同预算排序，不重复 no-filter。
+- 项目已决定固定 0.95 structure + 0.05 momentum，不再搜索融合权重。
+- 项目明确保留推荐实验中常见的 test Recall@20 逐 epoch 评估、早停和 best epoch 选择，不新增 validation split；所有方法必须使用完全相同协议。
+- 下一轮 `outputs_v2.0_amazon_book` 验证第二数据集：clean/20% noise × no-filter/95-5 early filtering，共四组。
 
 ## 必须避免的误读
 

@@ -19,7 +19,20 @@ git rev-parse --short HEAD
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
-## 当前推荐实验：outputs_v1.9
+## 当前推荐实验：Amazon-Book outputs_v2.0
+
+```bash
+cd /root/cyj/NR-GCF-KBS-/code
+
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v2.0_amazon_book \
+bash run_amazon_book_generalization_v2_0.sh
+```
+
+共四组：Amazon-Book 的 clean/20% replacement noise × no-filter/固定 95/5
+early adaptive filtering。seed 2026，test Recall@20 early stopping，summary only。
+
+## 上一轮权重确认实验：outputs_v1.9
 
 ```bash
 cd /root/cyj/NR-GCF-KBS-/code

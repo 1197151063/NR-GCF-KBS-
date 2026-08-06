@@ -1,6 +1,18 @@
 # 未解决问题与下一步决策
 
-## 最高优先级：outputs_v1.9 momentum 排序复核
+## 最高优先级：Amazon-Book outputs_v2.0 泛化验证
+
+固定 0.95/0.05，不再搜索权重。只验证：
+
+- clean + no filtering；
+- clean + 95/5 early adaptive filtering；
+- 20% replacement noise + no filtering；
+- 20% replacement noise + 95/5 early adaptive filtering。
+
+若 clean 安全且 noisy 相对 no-filter 提升，则进入多 noise-ratio 主实验；若失败，
+先诊断 Amazon-Book 的结构覆盖率、删除预算和触发稳定性，不立即增加新模块。
+
+## 已完成：outputs_v1.9 momentum 排序复核
 
 只比较 seed 2027、20% replacement noise：
 
