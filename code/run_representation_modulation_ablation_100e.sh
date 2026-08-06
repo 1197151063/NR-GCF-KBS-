@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Focused three-arm test for the connection between the validated T=20 hard
-# structure-momentum filter and representation modulation.  The default is a
-# single Yelp2018 20%-replacement run per arm; override NOISE_RATIOS only after
-# this focused pilot establishes a winner.
+# Focused test for the connection between adaptive structure-momentum filtering
+# and representation modulation.  The default is a single Yelp2018
+# 20%-replacement run per arm; override NOISE_RATIOS only after this focused
+# pilot establishes a winner.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -25,7 +25,12 @@ export RUN_PILOT_ANALYSIS=0
 export KEEP_EDGE_LABELS="${KEEP_EDGE_LABELS:-0}"
 export KEEP_GENERATED_TRAIN="${KEEP_GENERATED_TRAIN:-0}"
 export EDGE_FILTER_MODE=hard_structure_momentum
-export RELIABILITY_FILTER_EPOCH="${RELIABILITY_FILTER_EPOCH:-20}"
+export RELIABILITY_FILTER_SCHEDULE="${RELIABILITY_FILTER_SCHEDULE:-adaptive}"
+export RELIABILITY_ADAPTIVE_MIN_EPOCH="${RELIABILITY_ADAPTIVE_MIN_EPOCH:-5}"
+export RELIABILITY_ADAPTIVE_MAX_EPOCH="${RELIABILITY_ADAPTIVE_MAX_EPOCH:-10}"
+export RELIABILITY_ADAPTIVE_MIN_COVERAGE="${RELIABILITY_ADAPTIVE_MIN_COVERAGE:-0.99}"
+export RELIABILITY_ADAPTIVE_JACCARD="${RELIABILITY_ADAPTIVE_JACCARD:-0.90}"
+export RELIABILITY_ADAPTIVE_STABLE_CHECKS="${RELIABILITY_ADAPTIVE_STABLE_CHECKS:-2}"
 export RELIABILITY_MOMENTUM_DECAY="${RELIABILITY_MOMENTUM_DECAY:-0.90}"
 export RELIABILITY_MOMENTUM_Q="${RELIABILITY_MOMENTUM_Q:-0.80}"
 export RELIABILITY_STRUCTURE_Q="${RELIABILITY_STRUCTURE_Q:-0.20}"

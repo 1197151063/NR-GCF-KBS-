@@ -19,14 +19,14 @@ AI_MEMORY 下其余 Markdown。以这些文件和当前 Git HEAD 的真实代码
 4. 不在本地运行完整训练；
 5. 不覆盖或重构无关代码。
 
-当前最高优先级是审阅 outputs_v1.5，比较 original_always 与
-reliability_weighted_always 的 overall best、best post-filter、final result、
-过滤边集合和逐层 RMS trace。
+当前最高优先级是验证 adaptive filtering timing，比较 original_always 与
+reliability_weighted_always 的实际触发 epoch、coverage、removed-set Jaccard、
+overall best、best post-filter、final result、过滤边集合和逐层 RMS trace。
 ```
 
 ## 新 session 首轮应回答的问题
 
-- 当前代码 commit 是否至少为 `b30a463`？
+- 当前代码是否包含 adaptive filtering timing 与全局 Recall@20 early stopping？
 - 最新输出是否真的使用该 commit？
 - actual noise ratio 是否符合 requested ratio？
 - 两个 always-on 模式过滤前是否严格一致？

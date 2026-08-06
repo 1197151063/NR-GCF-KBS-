@@ -127,6 +127,35 @@ if (world.args.export_edge_diagnostics
     )
 if world.args.representation_modulation_ramp_epochs < 0:
     raise ValueError('--representation-modulation-ramp-epochs cannot be negative')
+if world.args.edge_reliability_filtering_schedule == 'adaptive':
+    if world.args.edge_filter_mode != 'hard_structure_momentum':
+        raise ValueError(
+            'adaptive filtering schedule requires '
+            '--edge-filter-mode hard_structure_momentum'
+        )
+    if world.args.edge_reliability_adaptive_min_epoch < 2:
+        raise ValueError('--edge-reliability-adaptive-min-epoch must be >= 2')
+    if (world.args.edge_reliability_adaptive_max_epoch
+            < world.args.edge_reliability_adaptive_min_epoch):
+        raise ValueError(
+            '--edge-reliability-adaptive-max-epoch must be >= min epoch'
+        )
+    if world.args.edge_reliability_adaptive_max_epoch > world.TRAIN_epochs:
+        raise ValueError(
+            '--edge-reliability-adaptive-max-epoch cannot exceed --epochs'
+        )
+    if not 0.0 <= world.args.edge_reliability_adaptive_min_coverage <= 1.0:
+        raise ValueError(
+            '--edge-reliability-adaptive-min-coverage must be within [0, 1]'
+        )
+    if not 0.0 <= world.args.edge_reliability_adaptive_jaccard <= 1.0:
+        raise ValueError(
+            '--edge-reliability-adaptive-jaccard must be within [0, 1]'
+        )
+    if world.args.edge_reliability_adaptive_stable_checks < 1:
+        raise ValueError(
+            '--edge-reliability-adaptive-stable-checks must be positive'
+        )
 if (world.args.representation_modulation_mode in (
         'reliability_weighted_always',
         'reliability_weighted_stage_two')
@@ -160,15 +189,26 @@ if world.args.export_edge_diagnostics:
 uses_stable_momentum = (
     world.args.edge_filter_mode == 'hard_structure_momentum'
 )
-active_filtering_epoch = (
-    int(world.args.edge_reliability_filtering_epoch)
-    if uses_stable_momentum else 15
+uses_adaptive_filtering = (
+    uses_stable_momentum
+    and world.args.edge_reliability_filtering_schedule == 'adaptive'
 )
+configured_filtering_epoch = (
+    int(world.args.edge_reliability_adaptive_max_epoch)
+    if uses_adaptive_filtering
+    else (
+        int(world.args.edge_reliability_filtering_epoch)
+        if uses_stable_momentum else 15
+    )
+)
+active_filtering_epoch = configured_filtering_epoch
 if active_filtering_epoch < 2 or active_filtering_epoch > world.TRAIN_epochs:
     raise ValueError(
         'Filtering epoch must be between 2 and the configured training epochs.'
     )
 stable_edge_momentum = None
+adaptive_filtering_controller = None
+cached_structural_features = None
 if uses_stable_momentum:
     from edge_reliability import StableEdgeMomentum
     stable_edge_momentum = StableEdgeMomentum(
@@ -176,6 +216,21 @@ if uses_stable_momentum:
         decay=world.args.edge_reliability_momentum_decay,
         device=device,
     )
+    if uses_adaptive_filtering:
+        from edge_reliability import AdaptiveFilteringTrigger
+        adaptive_filtering_controller = AdaptiveFilteringTrigger(
+            min_epoch=world.args.edge_reliability_adaptive_min_epoch,
+            max_epoch=world.args.edge_reliability_adaptive_max_epoch,
+            min_coverage=(
+                world.args.edge_reliability_adaptive_min_coverage
+            ),
+            jaccard_threshold=(
+                world.args.edge_reliability_adaptive_jaccard
+            ),
+            stable_checks=(
+                world.args.edge_reliability_adaptive_stable_checks
+            ),
+        )
 best = 0.
 patience = 0.
 max_score = 0.
@@ -188,6 +243,7 @@ best_post_filter_recall = None
 best_post_filter_ndcg = None
 representation_modulation_trace = []
 stopped_early = False
+filtering_applied = False
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
@@ -200,7 +256,80 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                  stable_edge_momentum=stable_edge_momentum,
                  stable_filtering_epoch=active_filtering_epoch,
                  update_legacy_momentum=not uses_stable_momentum)
-    if epoch == active_filtering_epoch:
+    filter_now = (
+        not filtering_applied and epoch == active_filtering_epoch
+    )
+    policy_for_filter = None
+    raw_momentum_for_filter = None
+    momentum_observed_mask_for_filter = None
+    if (uses_adaptive_filtering
+            and not filtering_applied
+            and epoch >= world.args.edge_reliability_adaptive_min_epoch
+            and epoch <= world.args.edge_reliability_adaptive_max_epoch):
+        from edge_reliability import (
+            build_reliability_policy,
+            compute_two_hop_structure_features,
+        )
+        raw_momentum_for_filter = stable_edge_momentum.snapshot(
+            require_all=False
+        )
+        momentum_observed_mask_for_filter = (
+            stable_edge_momentum.observed_mask()
+        )
+        coverage = stable_edge_momentum.coverage()
+        if cached_structural_features is None:
+            cached_structural_features = compute_two_hop_structure_features(
+                edge_index=train_edge_index,
+                num_users=num_users,
+                num_items=num_items,
+                topk=world.args.edge_diagnostics_topk,
+                chunk_size=world.args.edge_diagnostics_chunk_size,
+            )
+        policy_for_filter = build_reliability_policy(
+            edge_index=train_edge_index,
+            raw_momentum=raw_momentum_for_filter,
+            num_users=num_users,
+            num_items=num_items,
+            mode=world.args.edge_filter_mode,
+            topk=world.args.edge_diagnostics_topk,
+            chunk_size=world.args.edge_diagnostics_chunk_size,
+            min_degree=world.args.edge_diagnostics_min_degree,
+            momentum_quantile=world.args.edge_reliability_momentum_quantile,
+            structure_quantile=world.args.edge_reliability_structure_quantile,
+            structure_weight=world.args.edge_reliability_structure_weight,
+            minimum_weight=world.args.edge_reliability_min_weight,
+            momentum_semantics=(
+                'per_edge_ema_instance_bpr_loss_decay_'
+                + str(world.args.edge_reliability_momentum_decay)
+            ),
+            momentum_observed_mask=momentum_observed_mask_for_filter,
+            structural_features=cached_structural_features,
+        )
+        filter_now, readiness = adaptive_filtering_controller.observe(
+            epoch=epoch,
+            coverage=coverage,
+            retained_mask=policy_for_filter['retained_mask'].numpy(),
+        )
+        print_log(
+            'Adaptive filtering readiness: '
+            f'epoch={epoch}, coverage={coverage:.6f}, '
+            f'removed={readiness["removed_edge_count"]}, '
+            f'jaccard={readiness["removed_set_jaccard"]}, '
+            'stable_checks='
+            f'{readiness["consecutive_stable_checks"]}/'
+            f'{world.args.edge_reliability_adaptive_stable_checks}, '
+            f'trigger={filter_now}, reason={readiness["trigger_reason"]}.'
+        )
+        if filter_now:
+            active_filtering_epoch = epoch
+        else:
+            del policy_for_filter
+            del raw_momentum_for_filter
+            del momentum_observed_mask_for_filter
+            policy_for_filter = None
+            raw_momentum_for_filter = None
+            momentum_observed_mask_for_filter = None
+    if filter_now:
         if world.args.edge_filter_mode == 'current':
             raw_momentum_for_diagnostics = None
             normalized_score_for_diagnostics = None
@@ -363,8 +492,20 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 build_reliability_policy,
                 write_reliability_summary,
             )
-            if uses_stable_momentum:
-                raw_momentum = stable_edge_momentum.snapshot()
+            if policy_for_filter is not None:
+                raw_momentum = raw_momentum_for_filter
+                momentum_semantics = (
+                    'per_edge_ema_instance_bpr_loss_decay_'
+                    + str(world.args.edge_reliability_momentum_decay)
+                )
+                policy = policy_for_filter
+            elif uses_stable_momentum:
+                raw_momentum = stable_edge_momentum.snapshot(
+                    require_all=True
+                )
+                momentum_observed_mask_for_filter = (
+                    stable_edge_momentum.observed_mask()
+                )
                 momentum_semantics = (
                     'per_edge_ema_instance_bpr_loss_decay_'
                     + str(world.args.edge_reliability_momentum_decay)
@@ -372,23 +513,46 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             else:
                 raw_momentum = model.momentum_loss.detach().clone()
                 momentum_semantics = 'legacy_runtime_momentum'
-            policy = build_reliability_policy(
-                edge_index=train_edge_index,
-                raw_momentum=raw_momentum,
-                num_users=num_users,
-                num_items=num_items,
-                mode=world.args.edge_filter_mode,
-                topk=world.args.edge_diagnostics_topk,
-                chunk_size=world.args.edge_diagnostics_chunk_size,
-                min_degree=world.args.edge_diagnostics_min_degree,
-                momentum_quantile=world.args.edge_reliability_momentum_quantile,
-                structure_quantile=world.args.edge_reliability_structure_quantile,
-                structure_weight=world.args.edge_reliability_structure_weight,
-                minimum_weight=world.args.edge_reliability_min_weight,
-                momentum_semantics=momentum_semantics,
-            )
+            if policy_for_filter is None:
+                policy = build_reliability_policy(
+                    edge_index=train_edge_index,
+                    raw_momentum=raw_momentum,
+                    num_users=num_users,
+                    num_items=num_items,
+                    mode=world.args.edge_filter_mode,
+                    topk=world.args.edge_diagnostics_topk,
+                    chunk_size=world.args.edge_diagnostics_chunk_size,
+                    min_degree=world.args.edge_diagnostics_min_degree,
+                    momentum_quantile=(
+                        world.args.edge_reliability_momentum_quantile
+                    ),
+                    structure_quantile=(
+                        world.args.edge_reliability_structure_quantile
+                    ),
+                    structure_weight=(
+                        world.args.edge_reliability_structure_weight
+                    ),
+                    minimum_weight=world.args.edge_reliability_min_weight,
+                    momentum_semantics=momentum_semantics,
+                    momentum_observed_mask=(
+                        momentum_observed_mask_for_filter
+                    ),
+                    structural_features=cached_structural_features,
+                )
             if uses_stable_momentum:
-                policy['warmup_epoch_count'] = active_filtering_epoch
+                policy['warmup_epoch_count'] = epoch
+            if uses_adaptive_filtering:
+                policy['adaptive_filtering'] = (
+                    adaptive_filtering_controller.metadata()
+                )
+            else:
+                policy['adaptive_filtering'] = {
+                    'schedule': 'fixed',
+                    'configured_filtering_epoch': int(
+                        configured_filtering_epoch
+                    ),
+                    'actual_filtering_epoch': int(epoch),
+                }
             policy['representation_modulation'] = {
                 'mode': world.args.representation_modulation_mode,
                 'lambda': None,
@@ -498,6 +662,11 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             del raw_momentum
             del policy
             stable_edge_momentum = None
+            cached_structural_features = None
+            policy_for_filter = None
+            raw_momentum_for_filter = None
+            momentum_observed_mask_for_filter = None
+        filtering_applied = True
         original_train_edge_index = None
         if world.args.edge_diagnostics_stop_after_filter:
             print_log(
@@ -569,6 +738,16 @@ if (world.args.edge_filter_mode != 'current'
         early_stopping_patience=world.patience,
         early_stopped=stopped_early,
         early_stopping_wait=patience,
+        filtering_schedule=(
+            world.args.edge_reliability_filtering_schedule
+            if uses_stable_momentum else 'fixed'
+        ),
+        configured_filtering_epoch=configured_filtering_epoch,
+        actual_filtering_epoch=active_filtering_epoch,
+        adaptive_filtering_trace=(
+            adaptive_filtering_controller.trace
+            if adaptive_filtering_controller is not None else None
+        ),
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

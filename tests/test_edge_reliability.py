@@ -21,6 +21,42 @@ else:
 
 @unittest.skipUnless(np is not None, "NumPy unavailable")
 class EdgeReliabilityMathTest(unittest.TestCase):
+    def test_adaptive_trigger_requires_two_stable_checks(self):
+        trigger = edge_reliability.AdaptiveFilteringTrigger(
+            min_epoch=5,
+            max_epoch=10,
+            min_coverage=0.99,
+            jaccard_threshold=0.90,
+            stable_checks=2,
+        )
+        retained = np.array([False, True, True, False])
+        fired, _ = trigger.observe(5, 1.0, retained)
+        self.assertFalse(fired)
+        fired, _ = trigger.observe(6, 1.0, retained)
+        self.assertFalse(fired)
+        fired, row = trigger.observe(7, 1.0, retained)
+        self.assertTrue(fired)
+        self.assertEqual(row["trigger_reason"], "coverage_and_removed_set_stable")
+        self.assertEqual(trigger.trigger_epoch, 7)
+
+    def test_adaptive_trigger_forces_at_max_epoch(self):
+        trigger = edge_reliability.AdaptiveFilteringTrigger(
+            min_epoch=5,
+            max_epoch=6,
+            min_coverage=0.99,
+            jaccard_threshold=0.90,
+            stable_checks=2,
+        )
+        fired, _ = trigger.observe(
+            5, 0.5, np.array([False, True, True])
+        )
+        self.assertFalse(fired)
+        fired, row = trigger.observe(
+            6, 0.5, np.array([True, False, True])
+        )
+        self.assertTrue(fired)
+        self.assertEqual(row["trigger_reason"], "maximum_epoch_reached")
+
     def test_percentile_ranks_average_exact_ties(self):
         ranks = edge_reliability.percentile_ranks(
             np.array([3.0, 1.0, 1.0, np.nan, 2.0])
@@ -97,6 +133,17 @@ class EdgeReliabilityPolicyTest(unittest.TestCase):
             tracker.snapshot().numpy(), np.array([1.1, 4.0, 2.8]), rtol=1e-6
         )
 
+    def test_stable_edge_momentum_exposes_coverage_and_neutral_snapshot(self):
+        torch = edge_reliability.torch
+        tracker = edge_reliability.StableEdgeMomentum(
+            edge_count=3, decay=0.9, device=torch.device("cpu")
+        )
+        tracker.update(torch.tensor([0, 2]), torch.tensor([1.0, 3.0]))
+        self.assertAlmostEqual(tracker.coverage(), 2.0 / 3.0, places=6)
+        snapshot = tracker.snapshot(require_all=False)
+        self.assertTrue(bool(torch.isnan(snapshot[1])))
+        self.assertEqual(tracker.observation_counts().tolist(), [1, 0, 1])
+
     def test_soft_policy_keeps_bpr_edges_and_protects_degree_one(self):
         torch = edge_reliability.torch
         edges = torch.tensor([
@@ -124,6 +171,33 @@ class EdgeReliabilityPolicyTest(unittest.TestCase):
         self.assertTrue(bool(np.all(weights <= 1.0)))
         # Item 2 has degree one, so its only incident edge must have full weight.
         self.assertEqual(float(weights[5]), 1.0)
+
+    def test_unobserved_momentum_is_neutral_and_excluded_from_budget(self):
+        torch = edge_reliability.torch
+        edges = torch.tensor([
+            [0, 0, 1, 1, 2, 2],
+            [0, 1, 0, 1, 1, 2],
+        ], dtype=torch.long)
+        momentum = torch.tensor([0.9, float("nan"), 0.8, 0.1, 0.4, 0.7])
+        observed = torch.tensor([True, False, True, True, True, True])
+        policy = edge_reliability.build_reliability_policy(
+            edge_index=edges,
+            raw_momentum=momentum,
+            num_users=3,
+            num_items=3,
+            mode="hard_structure_momentum",
+            topk=2,
+            chunk_size=3,
+            min_degree=1,
+            momentum_quantile=0.8,
+            structure_quantile=0.2,
+            structure_weight=0.95,
+            minimum_weight=0.1,
+            momentum_observed_mask=observed,
+        )
+        self.assertEqual(float(policy["momentum_rank"][1]), 0.5)
+        self.assertFalse(bool(policy["consensus_candidate"][1]))
+        self.assertEqual(policy["momentum_unobserved_count"], 1)
 
 
 if __name__ == "__main__":

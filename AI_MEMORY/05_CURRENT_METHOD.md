@@ -38,6 +38,20 @@
 
 删除 fused risk 最高的 B 条边。不使用 degree protection。
 
+### Adaptive filtering time
+
+CrossNorm 从 epoch 1 始终开启，filtering 时点由 edge reliability readiness 决定，而不是由 norm 的开关决定：
+
+- 最早检查 epoch 5；
+- 已观察 edge 比例至少 0.99；
+- 相邻 preview removed sets 的 Jaccard 至少 0.90；
+- 连续两次满足稳定条件后触发，理论最早 epoch 7；
+- 若未稳定，epoch 10 强制触发；
+- preview 只读取训练 edge loss/structure，不读取 Recall、validation/test 或 synthetic label；
+- 未观察 edge 的 momentum rank 为中性 0.5，且不进入 high-momentum 删除预算。
+
+二跳结构特征只计算一次并在 readiness checks 之间缓存。每轮 preview 不修改传播图、sampler、optimizer、参数或随机数状态。
+
 ### Hard graph update
 
 删除后同时改变：

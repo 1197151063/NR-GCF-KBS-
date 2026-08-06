@@ -29,7 +29,7 @@
 
 1. 从 epoch 1 开始普通 BPR+L2 训练。
 2. 每条原始训练边通过稳定 edge ID 更新 detached instance BPR EMA。
-3. 在配置的 filtering epoch（当前推荐 T=20）冻结 EMA。
+3. fixed schedule 在配置 epoch 冻结；当前 adaptive schedule 在 epoch 5–10 根据 coverage 与 removed-set stability 冻结。
 4. 在 filtering 前训练图上计算 deterministic two-hop MinHash structure。
 5. 形成 structure-dominant fused risk。
 6. 计算 adaptive removal budget。

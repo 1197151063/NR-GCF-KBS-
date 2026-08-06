@@ -35,6 +35,7 @@ filter_epochs="${FILTER_EPOCHS:-10 15 20}"
 for filter_epoch in $filter_epochs; do
   echo "Starting hard_structure_momentum filter_epoch=$filter_epoch"
   EDGE_FILTER_MODE=hard_structure_momentum \
+  RELIABILITY_FILTER_SCHEDULE=fixed \
   RELIABILITY_FILTER_EPOCH="$filter_epoch" \
     bash "$script_dir/run_edge_diagnostics_grid.sh"
 done

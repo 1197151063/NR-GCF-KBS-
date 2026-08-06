@@ -16,14 +16,14 @@
 3. removed edges 是否相同；
 4. weighted RMS 是否在过滤后实际不同；
 5. best post-filter 是否提高；
-6. overall best 是否仍在 epoch 20 前；
+6. adaptive filtering 实际在哪个 epoch 触发，overall best 是否发生在过滤后；
 7. final epoch 是否稳定而非偶然峰值。
 
 ## 若 reliability-weighted always 有效
 
 下一步不要继续调很多超参数，优先：
 
-1. 固定方法和 T=20；
+1. 固定 adaptive timing 规则，不再按测试指标挑选 T；
 2. 补一个 clean/noisy 的同配置 baseline；
 3. noise ratio 扩到 0.1、0.2，暂时仍只用 seed 2026；
 4. 在第二数据集复现趋势；

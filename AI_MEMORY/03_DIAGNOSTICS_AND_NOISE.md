@@ -19,7 +19,7 @@
 - update 输入全部 detach；
 - 不参与 backward；
 - filtering 时要求所有训练边都至少观察一次；
-- 推荐冻结时间 T=20。
+- 旧配置曾推荐固定 T=20；always-on CrossNorm 当前改用 training-only adaptive epoch 5–10 触发。
 
 ## 结构分数
 

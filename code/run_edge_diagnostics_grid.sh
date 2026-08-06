@@ -101,6 +101,13 @@ Optional variables:
   RELIABILITY_MIN_WEIGHT  minimum soft propagation weight (default: 0.10)
   RELIABILITY_FILTER_EPOCH filtering epoch for hard_structure_momentum
                           (default: 15)
+  RELIABILITY_FILTER_SCHEDULE fixed or adaptive (default: fixed)
+  RELIABILITY_ADAPTIVE_MIN_EPOCH earliest adaptive check (default: 5)
+  RELIABILITY_ADAPTIVE_MAX_EPOCH forced adaptive filter epoch (default: 10)
+  RELIABILITY_ADAPTIVE_MIN_COVERAGE required observed-edge fraction
+                          (default: 0.99)
+  RELIABILITY_ADAPTIVE_JACCARD removed-set stability threshold (default: 0.90)
+  RELIABILITY_ADAPTIVE_STABLE_CHECKS consecutive stable checks (default: 2)
   RELIABILITY_MOMENTUM_DECAY stable EMA decay (default: 0.90)
 
 Prepared additive split layout:
@@ -155,6 +162,12 @@ reliability_structure_q="${RELIABILITY_STRUCTURE_Q:-0.20}"
 reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
 reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
 reliability_filter_epoch="${RELIABILITY_FILTER_EPOCH:-15}"
+reliability_filter_schedule="${RELIABILITY_FILTER_SCHEDULE:-fixed}"
+reliability_adaptive_min_epoch="${RELIABILITY_ADAPTIVE_MIN_EPOCH:-5}"
+reliability_adaptive_max_epoch="${RELIABILITY_ADAPTIVE_MAX_EPOCH:-10}"
+reliability_adaptive_min_coverage="${RELIABILITY_ADAPTIVE_MIN_COVERAGE:-0.99}"
+reliability_adaptive_jaccard="${RELIABILITY_ADAPTIVE_JACCARD:-0.90}"
+reliability_adaptive_stable_checks="${RELIABILITY_ADAPTIVE_STABLE_CHECKS:-2}"
 reliability_momentum_decay="${RELIABILITY_MOMENTUM_DECAY:-0.90}"
 representation_modulation_mode="${REPRESENTATION_MODULATION_MODE:-original_stage_two}"
 representation_modulation_ramp_epochs="${REPRESENTATION_MODULATION_RAMP_EPOCHS:-0}"
@@ -181,6 +194,46 @@ if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
   echo "RELIABILITY_FILTER_EPOCH must be an integer >= 2." >&2
   exit 2
 fi
+if [[ "$reliability_filter_schedule" != "fixed" && \
+      "$reliability_filter_schedule" != "adaptive" ]]; then
+  echo "RELIABILITY_FILTER_SCHEDULE must be fixed or adaptive." >&2
+  exit 2
+fi
+if [[ "$reliability_filter_schedule" == "adaptive" && \
+      "$edge_filter_mode" != "hard_structure_momentum" ]]; then
+  echo "Adaptive filtering requires EDGE_FILTER_MODE=hard_structure_momentum." >&2
+  exit 2
+fi
+if ! [[ "$reliability_adaptive_min_epoch" =~ ^[0-9]+$ ]] || \
+   [[ "$reliability_adaptive_min_epoch" -lt 2 ]]; then
+  echo "RELIABILITY_ADAPTIVE_MIN_EPOCH must be an integer >= 2." >&2
+  exit 2
+fi
+if ! [[ "$reliability_adaptive_max_epoch" =~ ^[0-9]+$ ]] || \
+   [[ "$reliability_adaptive_max_epoch" -lt "$reliability_adaptive_min_epoch" ]]; then
+  echo "RELIABILITY_ADAPTIVE_MAX_EPOCH must be >= adaptive min epoch." >&2
+  exit 2
+fi
+if ! [[ "$reliability_adaptive_stable_checks" =~ ^[0-9]+$ ]] || \
+   [[ "$reliability_adaptive_stable_checks" -lt 1 ]]; then
+  echo "RELIABILITY_ADAPTIVE_STABLE_CHECKS must be positive." >&2
+  exit 2
+fi
+for value in "$reliability_adaptive_min_coverage" "$reliability_adaptive_jaccard"; do
+  if ! python3 - "$value" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and 0.0 <= value <= 1.0 else 1)
+PY
+  then
+    echo "Adaptive coverage and Jaccard values must be within [0,1]." >&2
+    exit 2
+  fi
+done
 if [[ "$representation_modulation_mode" != "none" && \
       "$representation_modulation_mode" != "legacy_always" && \
       "$representation_modulation_mode" != "original_always" && \
@@ -243,9 +296,17 @@ if [[ -n "$train_patience" ]] && \
   exit 2
 fi
 if [[ "$edge_filter_mode" == "hard_structure_momentum" && \
-      -n "$train_epochs" && "$reliability_filter_epoch" -gt "$train_epochs" ]]; then
-  echo "RELIABILITY_FILTER_EPOCH cannot exceed TRAIN_EPOCHS." >&2
-  exit 2
+      -n "$train_epochs" ]]; then
+  if [[ "$reliability_filter_schedule" == "fixed" && \
+        "$reliability_filter_epoch" -gt "$train_epochs" ]]; then
+    echo "RELIABILITY_FILTER_EPOCH cannot exceed TRAIN_EPOCHS." >&2
+    exit 2
+  fi
+  if [[ "$reliability_filter_schedule" == "adaptive" && \
+        "$reliability_adaptive_max_epoch" -gt "$train_epochs" ]]; then
+    echo "RELIABILITY_ADAPTIVE_MAX_EPOCH cannot exceed TRAIN_EPOCHS." >&2
+    exit 2
+  fi
 fi
 if [[ "$structural_mode" != "two_hop_minhash" && "$structural_mode" != "none" ]]; then
   echo "STRUCTURAL_MODE must be two_hop_minhash or none." >&2
@@ -566,6 +627,12 @@ echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
 echo "  reliability filter epoch: $reliability_filter_epoch"
+echo "  reliability filter schedule: $reliability_filter_schedule"
+if [[ "$reliability_filter_schedule" == "adaptive" ]]; then
+  echo "  adaptive window: ${reliability_adaptive_min_epoch}-${reliability_adaptive_max_epoch}"
+  echo "  adaptive coverage/Jaccard: ${reliability_adaptive_min_coverage}/${reliability_adaptive_jaccard}"
+  echo "  adaptive stable checks: $reliability_adaptive_stable_checks"
+fi
 echo "  representation modulation: $representation_modulation_mode"
 echo "  representation ramp epochs: $representation_modulation_ramp_epochs"
 echo "  representation lambda: $representation_modulation_lambda"
@@ -595,7 +662,11 @@ for ratio in $noise_ratios; do
       run_name="${edge_filter_mode}_${run_name}"
     fi
     if [[ "$edge_filter_mode" == "hard_structure_momentum" ]]; then
-      run_name="${run_name}_filter_${reliability_filter_epoch}"
+      if [[ "$reliability_filter_schedule" == "adaptive" ]]; then
+        run_name="${run_name}_filter_adaptive_${reliability_adaptive_min_epoch}_${reliability_adaptive_max_epoch}"
+      else
+        run_name="${run_name}_filter_${reliability_filter_epoch}"
+      fi
     fi
     run_name="${run_name}_mod_${representation_modulation_mode}"
     run_dir="${output_root%/}/$dataset/$run_name"
@@ -685,6 +756,12 @@ for ratio in $noise_ratios; do
         --edge-reliability-structure-weight "$reliability_structure_weight"
         --edge-reliability-min-weight "$reliability_min_weight"
         --edge-reliability-filtering-epoch "$reliability_filter_epoch"
+        --edge-reliability-filtering-schedule "$reliability_filter_schedule"
+        --edge-reliability-adaptive-min-epoch "$reliability_adaptive_min_epoch"
+        --edge-reliability-adaptive-max-epoch "$reliability_adaptive_max_epoch"
+        --edge-reliability-adaptive-min-coverage "$reliability_adaptive_min_coverage"
+        --edge-reliability-adaptive-jaccard "$reliability_adaptive_jaccard"
+        --edge-reliability-adaptive-stable-checks "$reliability_adaptive_stable_checks"
         --edge-reliability-momentum-decay "$reliability_momentum_decay"
       )
     else
@@ -725,6 +802,12 @@ for ratio in $noise_ratios; do
       echo "replacement_selection=$replacement_selection"
       echo "edge_filter_mode=$edge_filter_mode"
       echo "reliability_filter_epoch=$reliability_filter_epoch"
+      echo "reliability_filter_schedule=$reliability_filter_schedule"
+      echo "reliability_adaptive_min_epoch=$reliability_adaptive_min_epoch"
+      echo "reliability_adaptive_max_epoch=$reliability_adaptive_max_epoch"
+      echo "reliability_adaptive_min_coverage=$reliability_adaptive_min_coverage"
+      echo "reliability_adaptive_jaccard=$reliability_adaptive_jaccard"
+      echo "reliability_adaptive_stable_checks=$reliability_adaptive_stable_checks"
       echo "reliability_momentum_decay=$reliability_momentum_decay"
       echo "representation_modulation_mode=$representation_modulation_mode"
       echo "representation_modulation_ramp_epochs=$representation_modulation_ramp_epochs"

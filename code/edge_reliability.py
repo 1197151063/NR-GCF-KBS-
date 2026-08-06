@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v7"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v8"
 
 
 def _require_torch():
@@ -222,6 +222,9 @@ class StableEdgeMomentum(object):
         self.decay = decay
         self.values = torch.zeros(int(edge_count), dtype=torch.float32, device=device)
         self.seen = torch.zeros(int(edge_count), dtype=torch.bool, device=device)
+        self.seen_count = torch.zeros(
+            int(edge_count), dtype=torch.int64, device=device
+        )
 
     @torch.no_grad() if torch is not None else (lambda function: function)
     def update(self, edge_ids, losses):
@@ -234,15 +237,133 @@ class StableEdgeMomentum(object):
         )
         self.values[edge_ids] = torch.where(first, losses, updated)
         self.seen[edge_ids] = True
+        self.seen_count[edge_ids] += 1
 
     @torch.no_grad() if torch is not None else (lambda function: function)
-    def snapshot(self):
+    def snapshot(self, require_all=True):
         missing = int((~self.seen).sum().detach().cpu().item())
-        if missing:
+        if missing and require_all:
             raise RuntimeError(
                 "Stable edge momentum has %d unobserved training edges" % missing
             )
-        return self.values.detach().clone()
+        values = self.values.detach().clone()
+        if missing:
+            values[~self.seen] = float("nan")
+        return values
+
+    @torch.no_grad() if torch is not None else (lambda function: function)
+    def observed_mask(self):
+        return self.seen.detach().clone()
+
+    @torch.no_grad() if torch is not None else (lambda function: function)
+    def coverage(self):
+        if self.seen.numel() == 0:
+            return 1.0
+        return float(self.seen.to(torch.float32).mean().detach().cpu().item())
+
+    @torch.no_grad() if torch is not None else (lambda function: function)
+    def observation_counts(self):
+        return self.seen_count.detach().clone()
+
+
+class AdaptiveFilteringTrigger(object):
+    """Training-only readiness rule for one irreversible filter event."""
+
+    def __init__(self, min_epoch, max_epoch, min_coverage,
+                 jaccard_threshold, stable_checks):
+        self.min_epoch = int(min_epoch)
+        self.max_epoch = int(max_epoch)
+        self.min_coverage = float(min_coverage)
+        self.jaccard_threshold = float(jaccard_threshold)
+        self.required_stable_checks = int(stable_checks)
+        if self.min_epoch < 2:
+            raise ValueError("adaptive min_epoch must be at least 2")
+        if self.max_epoch < self.min_epoch:
+            raise ValueError("adaptive max_epoch must be >= min_epoch")
+        if not 0.0 <= self.min_coverage <= 1.0:
+            raise ValueError("adaptive min_coverage must be within [0, 1]")
+        if not 0.0 <= self.jaccard_threshold <= 1.0:
+            raise ValueError("adaptive Jaccard threshold must be within [0, 1]")
+        if self.required_stable_checks < 1:
+            raise ValueError("adaptive stable_checks must be positive")
+        self.previous_removed = None
+        self.consecutive_stable_checks = 0
+        self.trace = []
+        self.triggered = False
+        self.trigger_epoch = None
+        self.trigger_reason = None
+
+    @staticmethod
+    def _jaccard(left, right):
+        union = np.logical_or(left, right).sum()
+        if int(union) == 0:
+            return 1.0
+        intersection = np.logical_and(left, right).sum()
+        return float(intersection / union)
+
+    def observe(self, epoch, coverage, retained_mask):
+        if self.triggered:
+            raise RuntimeError("adaptive filtering trigger is already frozen")
+        epoch = int(epoch)
+        coverage = float(coverage)
+        retained = np.asarray(retained_mask, dtype=bool)
+        removed = ~retained
+        coverage_ready = coverage >= self.min_coverage
+        jaccard = None
+        if coverage_ready and self.previous_removed is not None:
+            jaccard = self._jaccard(removed, self.previous_removed)
+            if jaccard >= self.jaccard_threshold:
+                self.consecutive_stable_checks += 1
+            else:
+                self.consecutive_stable_checks = 0
+        else:
+            self.consecutive_stable_checks = 0
+
+        if coverage_ready:
+            self.previous_removed = removed.copy()
+        else:
+            self.previous_removed = None
+
+        stable_ready = (
+            coverage_ready
+            and self.consecutive_stable_checks >= self.required_stable_checks
+        )
+        forced = epoch >= self.max_epoch
+        should_trigger = stable_ready or forced
+        reason = None
+        if stable_ready:
+            reason = "coverage_and_removed_set_stable"
+        elif forced:
+            reason = "maximum_epoch_reached"
+        row = {
+            "epoch": epoch,
+            "coverage": coverage,
+            "coverage_ready": bool(coverage_ready),
+            "removed_edge_count": int(removed.sum()),
+            "removed_set_jaccard": jaccard,
+            "consecutive_stable_checks": int(self.consecutive_stable_checks),
+            "triggered": bool(should_trigger),
+            "trigger_reason": reason,
+        }
+        self.trace.append(row)
+        if should_trigger:
+            self.triggered = True
+            self.trigger_epoch = epoch
+            self.trigger_reason = reason
+        return should_trigger, row
+
+    def metadata(self):
+        return {
+            "schedule": "adaptive",
+            "min_epoch": self.min_epoch,
+            "max_epoch": self.max_epoch,
+            "min_coverage": self.min_coverage,
+            "jaccard_threshold": self.jaccard_threshold,
+            "required_consecutive_stable_checks": self.required_stable_checks,
+            "actual_filtering_epoch": self.trigger_epoch,
+            "trigger_reason": self.trigger_reason,
+            "trace": list(self.trace),
+        }
 
 
 def _structure_only_retained_mask(structure, protected, target_remove_count):
@@ -344,11 +465,43 @@ def _gated_soft_risk(momentum_rank, structure_rank,
 
 
 @torch.no_grad() if torch is not None else (lambda function: function)
+def compute_two_hop_structure_features(
+        edge_index, num_users, num_items, topk, chunk_size):
+    """Compute deterministic structure once for repeated adaptive previews."""
+    _require_torch()
+    edge_count = int(edge_index.size(1))
+    from edge_diagnostics import TwoHopMinHash
+    engine = TwoHopMinHash(
+        edge_index=edge_index.detach(),
+        num_users=num_users,
+        num_items=num_items,
+        topk=topk,
+        structural_mode="two_hop_minhash",
+    )
+    user_side = np.full(edge_count, np.nan, dtype=np.float32)
+    item_side = np.full(edge_count, np.nan, dtype=np.float32)
+    for start in range(0, edge_count, int(chunk_size)):
+        end = min(start + int(chunk_size), edge_count)
+        chunk = engine.compute_chunk(start, end)
+        user_side[start:end] = chunk["user_side_structure_mean"].numpy()
+        item_side[start:end] = chunk["item_side_structure_mean"].numpy()
+    del engine
+    structure, valid_side_count = _available_side_mean(user_side, item_side)
+    return {
+        "user_side": user_side,
+        "item_side": item_side,
+        "structure": structure,
+        "valid_side_count": valid_side_count,
+    }
+
+
+@torch.no_grad() if torch is not None else (lambda function: function)
 def build_reliability_policy(
         edge_index, raw_momentum, num_users, num_items, mode, topk,
         chunk_size, min_degree, momentum_quantile, structure_quantile,
         structure_weight, minimum_weight,
-        momentum_semantics="legacy_runtime_momentum"):
+        momentum_semantics="legacy_runtime_momentum",
+        momentum_observed_mask=None, structural_features=None):
     """Compute a frozen filtering policy without reading evaluation labels."""
     _require_torch()
     if mode not in (
@@ -373,29 +526,47 @@ def build_reliability_policy(
     if raw_momentum.numel() != edge_count:
         raise ValueError("raw_momentum must contain one value per training edge")
 
-    # Reuse the diagnostics estimator, but retain only two side means in CPU
-    # memory.  No full node-by-node matrix or edge-pair Cartesian product is
-    # constructed.
-    from edge_diagnostics import TwoHopMinHash
-    engine = TwoHopMinHash(
-        edge_index=edge_index.detach(),
-        num_users=num_users,
-        num_items=num_items,
-        topk=topk,
-        structural_mode="two_hop_minhash",
+    # Adaptive filtering reuses this deterministic cache across readiness
+    # checks.  The cache contains O(E) arrays, never a dense node-node matrix.
+    if structural_features is None:
+        structural_features = compute_two_hop_structure_features(
+            edge_index=edge_index,
+            num_users=num_users,
+            num_items=num_items,
+            topk=topk,
+            chunk_size=chunk_size,
+        )
+    user_side = np.asarray(structural_features["user_side"], dtype=np.float32)
+    item_side = np.asarray(structural_features["item_side"], dtype=np.float32)
+    structure = np.asarray(structural_features["structure"], dtype=np.float64)
+    valid_side_count = np.asarray(
+        structural_features["valid_side_count"], dtype=np.int8
     )
-    user_side = np.full(edge_count, np.nan, dtype=np.float32)
-    item_side = np.full(edge_count, np.nan, dtype=np.float32)
-    for start in range(0, edge_count, int(chunk_size)):
-        end = min(start + int(chunk_size), edge_count)
-        chunk = engine.compute_chunk(start, end)
-        user_side[start:end] = chunk["user_side_structure_mean"].numpy()
-        item_side[start:end] = chunk["item_side_structure_mean"].numpy()
-    del engine
+    for name, values in (
+            ("user_side", user_side), ("item_side", item_side),
+            ("structure", structure),
+            ("valid_side_count", valid_side_count)):
+        if values.size != edge_count:
+            raise ValueError(
+                "cached structural feature %s has incorrect edge identity" % name
+            )
 
-    structure, valid_side_count = _available_side_mean(user_side, item_side)
     momentum = raw_momentum.detach().to(device="cpu", dtype=torch.float64).numpy()
-    momentum_rank = percentile_ranks(momentum)
+    if momentum_observed_mask is None:
+        momentum_observed = np.isfinite(momentum)
+    else:
+        if momentum_observed_mask.numel() != edge_count:
+            raise ValueError(
+                "momentum_observed_mask must contain one value per training edge"
+            )
+        momentum_observed = momentum_observed_mask.detach().to(
+            device="cpu", dtype=torch.bool
+        ).numpy()
+        momentum_observed &= np.isfinite(momentum)
+    momentum_rank = np.full(edge_count, 0.5, dtype=np.float64)
+    momentum_rank[momentum_observed] = percentile_ranks(
+        momentum[momentum_observed]
+    )
     structure_rank = percentile_ranks(structure)
     clean_loss_rank = 1.0 - momentum_rank
     reliability = (
@@ -414,7 +585,7 @@ def build_reliability_policy(
         | (item_degree - 1 < int(min_degree))
     )
 
-    finite_momentum = momentum[np.isfinite(momentum)]
+    finite_momentum = momentum[momentum_observed]
     finite_structure = structure[np.isfinite(structure)]
     momentum_threshold = (
         float(np.quantile(finite_momentum, float(momentum_quantile)))
@@ -425,7 +596,7 @@ def build_reliability_policy(
         if finite_structure.size else None
     )
     high_momentum = (
-        np.isfinite(momentum) & (momentum >= momentum_threshold)
+        momentum_observed & (momentum >= momentum_threshold)
         if momentum_threshold is not None else np.zeros(edge_count, dtype=bool)
     )
     low_structure = (
@@ -491,6 +662,9 @@ def build_reliability_policy(
         "mode": mode,
         "frozen_at_filter_epoch": True,
         "uses_synthetic_labels": False,
+        "unobserved_momentum_rule": (
+            "momentum_rank=0.5 and excluded from the high-momentum budget"
+        ),
     }
     if mode == "hard_consensus":
         decision.update({
@@ -530,6 +704,10 @@ def build_reliability_policy(
         "propagation_weight": torch.from_numpy(propagation_weight),
         "momentum": momentum,
         "momentum_rank": momentum_rank,
+        "momentum_observed_mask": momentum_observed,
+        "momentum_observed_count": int(momentum_observed.sum()),
+        "momentum_unobserved_count": int((~momentum_observed).sum()),
+        "momentum_coverage": float(momentum_observed.mean()),
         "user_side_structure": user_side,
         "item_side_structure": item_side,
         "structure": structure,
@@ -604,6 +782,14 @@ def write_reliability_summary(
         "adaptive_budget_count_without_connectivity_constraint": int(
             policy["adaptive_budget_count_without_connectivity_constraint"]
         ),
+        "momentum_observation": {
+            "observed_edge_count": int(policy["momentum_observed_count"]),
+            "unobserved_edge_count": int(policy["momentum_unobserved_count"]),
+            "coverage": float(policy["momentum_coverage"]),
+            "unobserved_rank": 0.5,
+            "unobserved_in_high_momentum_budget": False,
+        },
+        "adaptive_filtering": policy.get("adaptive_filtering"),
         "momentum_semantics": policy.get("momentum_semantics"),
         "representation_modulation": policy.get("representation_modulation"),
         "thresholds": {
@@ -627,6 +813,7 @@ def write_reliability_summary(
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
             "reliability": "structure_weight * percentile_rank(structure) + (1-structure_weight) * (1-percentile_rank(momentum_signal)).",
             "fused_risk": "structure_weight * (1-percentile_rank(structure)) + (1-structure_weight) * percentile_rank(momentum).",
+            "unobserved_momentum": "Unobserved edges receive neutral momentum rank 0.5 and cannot enter the high-momentum budget; their structural score remains unchanged.",
             "gated_soft_risk": "sqrt(clip((momentum_rank-q_m)/(1-q_m),0,1) * clip((q_s-structure_rank)/q_s,0,1)); exactly zero outside the consensus tail.",
             "node_confidence": "Mean frozen reliability of retained incident edges. Missing retained-edge reliability is neutral one; nodes without retained edges receive zero weight.",
             "protection": "user_degree_after_if_removed < min_degree OR item_degree_after_if_removed < min_degree.",
@@ -720,7 +907,9 @@ def write_training_summary(
         representation_modulation_ramp_epochs, representation_modulation_lambda,
         representation_modulation_trace, best_post_filter_epoch,
         best_post_filter_recall, best_post_filter_ndcg,
-        early_stopping_patience, early_stopped, early_stopping_wait):
+        early_stopping_patience, early_stopped, early_stopping_wait,
+        filtering_schedule, configured_filtering_epoch,
+        actual_filtering_epoch, adaptive_filtering_trace):
     """Write the compact outcome for a completed or early-stopped run."""
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -735,6 +924,13 @@ def write_training_summary(
             "patience": int(early_stopping_patience),
             "stopped_early": bool(early_stopped),
             "consecutive_non_improving_epochs": int(early_stopping_wait),
+        },
+        "filtering_timing": {
+            "schedule": str(filtering_schedule),
+            "configured_filtering_epoch": int(configured_filtering_epoch),
+            "actual_filtering_epoch": int(actual_filtering_epoch),
+            "uses_evaluation_metric": False,
+            "adaptive_trace": adaptive_filtering_trace,
         },
         "best_epoch": int(best_epoch),
         "best_recall_at_20": float(best_recall),

@@ -33,6 +33,11 @@ def summarize(root):
             or reliability.get("representation_modulation")
             or {}
         )
+        adaptive_filtering = reliability.get("adaptive_filtering") or {}
+        filtering_timing = training.get("filtering_timing") or {}
+        early_stopping = training.get("early_stopping") or {}
+        adaptive_trace = adaptive_filtering.get("trace") or []
+        trigger_snapshot = adaptive_trace[-1] if adaptive_trace else {}
         runs.append({
             "run": str(reliability_path.parent.parent.relative_to(root)),
             "dataset": reliability.get("dataset"),
@@ -40,6 +45,18 @@ def summarize(root):
             "seed": reliability.get("seed"),
             "requested_noise_ratio": reliability.get("requested_noise_ratio"),
             "filtering_epoch": reliability.get("filtering_epoch"),
+            "filtering_schedule": (
+                adaptive_filtering.get("schedule")
+                or filtering_timing.get("schedule")
+            ),
+            "filtering_trigger_reason": adaptive_filtering.get("trigger_reason"),
+            "filtering_trigger_coverage": trigger_snapshot.get("coverage"),
+            "filtering_trigger_jaccard": trigger_snapshot.get(
+                "removed_set_jaccard"
+            ),
+            "filtering_trigger_stable_checks": trigger_snapshot.get(
+                "consecutive_stable_checks"
+            ),
             "momentum_semantics": reliability.get("momentum_semantics"),
             "representation_modulation_mode": representation_modulation.get("mode"),
             "representation_modulation_ramp_epochs": representation_modulation.get("ramp_epochs"),
@@ -52,6 +69,10 @@ def summarize(root):
             ),
             "epochs_completed": training.get("epochs_completed"),
             "completed_requested_epochs": training.get("completed_requested_epochs"),
+            "early_stopped": early_stopping.get("stopped_early"),
+            "early_stopping_wait": early_stopping.get(
+                "consecutive_non_improving_epochs"
+            ),
             "best_epoch": training.get("best_epoch"),
             "best_recall_at_20": training.get("best_recall_at_20"),
             "best_ndcg_at_20": training.get("best_ndcg_at_20"),
@@ -81,7 +102,7 @@ def summarize(root):
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v5",
+        "schema_version": "nrgcf_reliability_comparison_v6",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

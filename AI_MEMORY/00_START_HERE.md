@@ -20,7 +20,7 @@
 ## 当前最重要的状态
 
 - 已验证：Yelp2018、20% uniform degree-preserving replacement noise 下，结构一致性是强噪声信号。
-- 已验证：稳定 per-edge EMA BPR loss 能补充结构信号；T=20 比 T=10/15 更好。
+- 已验证：稳定 per-edge EMA BPR loss 能补充结构信号；旧配置下 T=20 比 T=10/15 更好，但该结论不直接适用于 epoch 1 开启 CrossNorm 的快速收敛配置。
 - 当前 hard filtering 风险：
 
   `0.95 * low_structure_rank + 0.05 * high_momentum_rank`。
@@ -32,6 +32,7 @@
 - 当前代码主对照：`original_always` 与 `reliability_weighted_always`。
 - 当前代码严格采用用户指定的 direct cross norm；`lambda_` 在这些 NRGCF 模式中不参与 forward。
 - 所有训练入口使用全局 Recall@20 early stopping：连续 20 个 epoch 没有严格提升即停止。
+- 当前方法使用 training-only adaptive filtering timing：epoch 5 起检查，coverage 至少 0.99，removed-set Jaccard 至少 0.90 且连续稳定两次，最晚 epoch 10 强制过滤。
 - 下一轮实验尚未完成：`outputs_v1.5`，noise ratio `0` 和 `0.2`，seed `2026`。
 
 ## 必须避免的误读

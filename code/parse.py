@@ -129,7 +129,47 @@ def parse_args():
     parser.add_argument('--edge-reliability-min-weight', type=float, default=0.10,
                         help='minimum propagation weight in soft reliability mode')
     parser.add_argument('--edge-reliability-filtering-epoch', type=int, default=15,
-                        help='warm-up/filter epoch for hard_structure_momentum')
+                        help='fixed warm-up/filter epoch for hard_structure_momentum')
+    parser.add_argument(
+        '--edge-reliability-filtering-schedule',
+        type=str,
+        default='fixed',
+        choices=['fixed', 'adaptive'],
+        help=(
+            'fixed filters at --edge-reliability-filtering-epoch; adaptive '
+            'uses training-only edge coverage and removed-set stability'
+        ),
+    )
+    parser.add_argument(
+        '--edge-reliability-adaptive-min-epoch',
+        type=int,
+        default=5,
+        help='earliest epoch at which adaptive filtering may trigger',
+    )
+    parser.add_argument(
+        '--edge-reliability-adaptive-max-epoch',
+        type=int,
+        default=10,
+        help='epoch at which adaptive filtering is forced if not yet stable',
+    )
+    parser.add_argument(
+        '--edge-reliability-adaptive-min-coverage',
+        type=float,
+        default=0.99,
+        help='minimum fraction of training edges observed by momentum tracking',
+    )
+    parser.add_argument(
+        '--edge-reliability-adaptive-jaccard',
+        type=float,
+        default=0.90,
+        help='minimum consecutive removed-set Jaccard for adaptive readiness',
+    )
+    parser.add_argument(
+        '--edge-reliability-adaptive-stable-checks',
+        type=int,
+        default=2,
+        help='number of consecutive stable Jaccard checks required',
+    )
     parser.add_argument('--edge-reliability-momentum-decay', type=float, default=0.90,
                         help='stable per-edge EMA decay for hard_structure_momentum')
 

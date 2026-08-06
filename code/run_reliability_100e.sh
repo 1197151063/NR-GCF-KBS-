@@ -19,8 +19,8 @@ export SEEDS="${SEEDS:-2026}"
 export GPU_ID="${GPU_ID:-0}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/nrgcf_reliability_100e}"
 export TRAIN_EPOCHS="${TRAIN_EPOCHS:-100}"
-# A value greater than TRAIN_EPOCHS ensures each run reaches epoch 100.
 export TRAIN_PATIENCE="${TRAIN_PATIENCE:-20}"
+export RELIABILITY_FILTER_SCHEDULE=fixed
 export STOP_AFTER_FILTER=0
 export SUMMARY_ONLY=1
 export RUN_PILOT_ANALYSIS=0

@@ -40,7 +40,7 @@ bash run_representation_modulation_ablation_100e.sh
 - 全局 Recall@20 early-stopping patience 20；
 - lr 0.0005；
 - init weight 0.01；
-- T=20；
+- adaptive filtering：min epoch 5、max epoch 10、coverage 0.99、Jaccard 0.90、连续稳定检查 2 次；
 - EMA decay 0.9；
 - structure weight 0.95；
 - summary only；

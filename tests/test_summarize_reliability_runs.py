@@ -24,6 +24,17 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
                 "mode": "soft_reliability",
                 "seed": 2026,
                 "requested_noise_ratio": 0.2,
+                "filtering_epoch": 7,
+                "adaptive_filtering": {
+                    "schedule": "adaptive",
+                    "trigger_reason": "coverage_and_removed_set_stable",
+                    "trace": [{
+                        "epoch": 7,
+                        "coverage": 1.0,
+                        "removed_set_jaccard": 0.95,
+                        "consecutive_stable_checks": 2,
+                    }],
+                },
                 "retained_edge_count": 10,
                 "removed_edge_count": 0,
                 "removed_ratio": 0.0,
@@ -42,6 +53,10 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
             (output / "training_summary.json").write_text(json.dumps({
                 "epochs_completed": 100,
                 "completed_requested_epochs": True,
+                "early_stopping": {
+                    "stopped_early": False,
+                    "consecutive_non_improving_epochs": 3,
+                },
                 "best_epoch": 93,
                 "best_recall_at_20": 0.12,
                 "best_ndcg_at_20": 0.08,
@@ -52,6 +67,8 @@ class SummarizeReliabilityRunsTest(unittest.TestCase):
             self.assertEqual(report["run_count"], 1)
             self.assertEqual(report["runs"][0]["epochs_completed"], 100)
             self.assertEqual(report["runs"][0]["reliability_auroc"], 0.8)
+            self.assertEqual(report["runs"][0]["filtering_schedule"], "adaptive")
+            self.assertEqual(report["runs"][0]["filtering_trigger_coverage"], 1.0)
 
 
 if __name__ == "__main__":

@@ -95,7 +95,7 @@ T=20 相比 hard structure-only：
 
 单独 structure：AUROC 0.8923、AUPRC 0.6915。融合后 AUPRC 达 0.7174，支持 momentum 提供互补排序信息。
 
-结论：固定 T=20，不再搜索 10/15/20。
+当时结论：旧配置固定 T=20，不再搜索 10/15/20。该结论后来被 always-on CrossNorm 的快速收敛观察取代；当前方法改用 training-only adaptive timing，不能把这条历史结论当作现行配置。
 
 ## Representation modulation 失败路径
 
@@ -140,7 +140,7 @@ T=20 相比 hard structure-only：
 - dataset：Yelp2018；
 - noise ratio：0、0.2；
 - seed：2026；
-- T=20；
+- 当时使用 T=20；当前实现已改为 adaptive epoch 5–10；
 - epochs=100；
 - lr=5e-4；
 - init_weight=0.01；
