@@ -19,7 +19,21 @@ git rev-parse --short HEAD
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
-## 当前推荐实验：outputs_v1.8
+## 当前推荐实验：outputs_v1.9
+
+```bash
+cd /root/cyj/NR-GCF-KBS-/code
+
+GPU_ID=0 \
+OUTPUT_ROOT=/root/autodl-tmp/outputs/outputs_v1.9 \
+bash run_momentum_ranking_confirmation_v1_9.sh
+```
+
+只跑 seed 2027、20% replacement noise 的两组同预算对照：
+`structure_weight=0.95` 与 `1.0`。两个 arm 使用独立子目录，最终自动生成统一
+`comparison_summary.json`。
+
+## 上一轮 clean safety 实验：outputs_v1.8
 
 ```bash
 cd /root/cyj/NR-GCF-KBS-/code

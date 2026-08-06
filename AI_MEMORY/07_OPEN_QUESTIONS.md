@@ -1,6 +1,17 @@
 # 未解决问题与下一步决策
 
-## 最高优先级：outputs_v1.8 clean safety 与 momentum 排序消融
+## 最高优先级：outputs_v1.9 momentum 排序复核
+
+只比较 seed 2027、20% replacement noise：
+
+- 同一 momentum-calibrated budget，`structure_weight=0.95`；
+- 同一 momentum-calibrated budget，`structure_weight=1.0`。
+
+若 1.0 再次不低于 0.95，则固定“momentum 决定预算、structure 决定排序”，
+停止继续搜索融合权重。若 0.95 明显反超，则当前差异具有 seed 敏感性，需要在
+最终三 seed 主实验中决定，而不能基于 seed 2026 锁定公式。
+
+## 已完成：outputs_v1.8 clean safety 与 momentum 排序消融
 
 只新增：
 
