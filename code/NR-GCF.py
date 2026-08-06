@@ -116,6 +116,8 @@ def seed_runtime(seed):
 
 seed_runtime(world.seed)
 device = world.device
+if world.patience < 1:
+    raise ValueError('--patience must be a positive integer')
 if (world.args.export_edge_diagnostics
         and world.args.edge_filter_mode != 'current'):
     raise ValueError(
@@ -185,6 +187,7 @@ best_post_filter_epoch = None
 best_post_filter_recall = None
 best_post_filter_ndcg = None
 representation_modulation_trace = []
+stopped_early = False
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
@@ -526,11 +529,18 @@ for epoch in range(1, world.TRAIN_epochs + 1):
         best_epoch = epoch
         best_recall = recall[20]
         best_ndcg = ndcg[20]
-    if flag == 1:
-        break
     print_log(f'Epoch: {epoch:03d}, aver_loss : {loss:.5f}, R@20: '
             f'{recall[20]:.4f}, N@20: {ndcg[20]:.4f}, '
             f'time:{end_time-start_time:.2f} seconds')
+    if flag == 1:
+        stopped_early = True
+        print_log(
+            'Global early stopping at epoch '
+            f'{epoch}: Recall@20 did not improve for '
+            f'{world.patience} consecutive epochs. '
+            f'Best Recall@20={best_recall:.6f} at epoch {best_epoch}.'
+        )
+        break
 if (world.args.edge_filter_mode != 'current'
         or world.args.export_edge_reliability_summary):
     from edge_reliability import write_training_summary
@@ -556,6 +566,9 @@ if (world.args.edge_filter_mode != 'current'
         best_post_filter_epoch=best_post_filter_epoch,
         best_post_filter_recall=best_post_filter_recall,
         best_post_filter_ndcg=best_post_filter_ndcg,
+        early_stopping_patience=world.patience,
+        early_stopped=stopped_early,
+        early_stopping_wait=patience,
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

@@ -719,14 +719,23 @@ def write_training_summary(
         bpr_positive_edge_count, representation_modulation_mode,
         representation_modulation_ramp_epochs, representation_modulation_lambda,
         representation_modulation_trace, best_post_filter_epoch,
-        best_post_filter_recall, best_post_filter_ndcg):
-    """Write the small outcome needed to compare the completed 100-epoch runs."""
+        best_post_filter_recall, best_post_filter_ndcg,
+        early_stopping_patience, early_stopped, early_stopping_wait):
+    """Write the compact outcome for a completed or early-stopped run."""
     report = {
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
         "requested_epochs": int(requested_epochs),
         "epochs_completed": int(epochs_completed),
         "completed_requested_epochs": int(epochs_completed) == int(requested_epochs),
+        "early_stopping": {
+            "monitor": "Recall@20",
+            "mode": "max",
+            "strict_improvement_required": True,
+            "patience": int(early_stopping_patience),
+            "stopped_early": bool(early_stopped),
+            "consecutive_non_improving_epochs": int(early_stopping_wait),
+        },
         "best_epoch": int(best_epoch),
         "best_recall_at_20": float(best_recall),
         "best_ndcg_at_20": float(best_ndcg),

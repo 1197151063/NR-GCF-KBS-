@@ -204,18 +204,28 @@ def early_stopping(recall,
                    best,
                    patience,
                    model):
-    if patience < world.patience: 
-        if recall + ndcg > best: 
-            patience = 0
-            print('[BEST]')
-            best = recall + ndcg
-            # torch.save(model.state_dict(), save_file_name)
-            # torch.save(model.state_dict(),'./models/' + save_file_name)
-        else:
-            patience += 1
-        return 0,best,patience
-    else:
-        return 1,best,patience # Perform Early Stopping 
+    """Apply global Recall@20 early stopping.
+
+    ``ndcg`` and ``model`` remain in the signature for compatibility with the
+    existing training entry points.  Only a strict Recall@20 improvement resets
+    the counter.  The stop flag is raised on the epoch that completes the
+    configured number of consecutive non-improving evaluations.
+    """
+    del ndcg, model
+    if recall > best:
+        patience = 0
+        best = recall
+        print('[BEST Recall@20]')
+        return 0, best, patience
+
+    patience += 1
+    should_stop = patience >= world.patience
+    if should_stop:
+        print(
+            '[EARLY STOP] Recall@20 did not improve for '
+            f'{world.patience} consecutive epochs.'
+        )
+    return int(should_stop), best, patience
 
 def eval(node_count,topk_index,logits,ground_truth,k):
     isin_mat = ground_truth.gather(1, topk_index)

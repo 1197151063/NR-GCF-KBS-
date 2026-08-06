@@ -1,7 +1,7 @@
 # NR-GCF KBS 项目记忆入口
 
 - 最后更新：2026-08-05
-- 模型代码基线：`b30a463`
+- 模型代码基线：以当前 `main` HEAD 为准；AI_MEMORY 初始快照建立于 `b30a463` 之后。
 - 工作仓库：`https://github.com/1197151063/NR-GCF-KBS-.git`
 - 主要远程目录：`/root/cyj/NR-GCF-KBS-/code`
 - 远程输出根目录：`/root/autodl-tmp/outputs`
@@ -31,6 +31,7 @@
 - 当前推荐衔接：cross norm 从 epoch 1 始终启用；过滤后仅把无权 RMS 统计切换为 reliability-weighted RMS。
 - 当前代码主对照：`original_always` 与 `reliability_weighted_always`。
 - 当前代码严格采用用户指定的 direct cross norm；`lambda_` 在这些 NRGCF 模式中不参与 forward。
+- 所有训练入口使用全局 Recall@20 early stopping：连续 20 个 epoch 没有严格提升即停止。
 - 下一轮实验尚未完成：`outputs_v1.5`，noise ratio `0` 和 `0.2`，seed `2026`。
 
 ## 必须避免的误读

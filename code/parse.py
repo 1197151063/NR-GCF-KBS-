@@ -21,7 +21,16 @@ def parse_args():
     
     parser.add_argument('--dataset', type=str, default='yelp2018')
 
-    parser.add_argument('--patience', type=int, default=50)
+    parser.add_argument(
+        '--patience',
+        type=int,
+        default=20,
+        help=(
+            'global early-stopping patience monitored on Recall@20; '
+            'training stops after this many consecutive epochs without '
+            'a strict Recall@20 improvement (default: 20)'
+        ),
+    )
 
     parser.add_argument('--dropout', type=float, default=1e-1)
 

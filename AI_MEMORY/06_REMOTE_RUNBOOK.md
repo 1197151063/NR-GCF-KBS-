@@ -15,7 +15,7 @@ git pull origin main
 git rev-parse --short HEAD
 ```
 
-当前应至少为：`b30a463`。
+拉取后应确认 `main` 包含全局 Recall@20 early stopping 和当前 always-on CrossNorm 实现；具体版本以本地最新提交为准。
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
@@ -37,7 +37,7 @@ bash run_representation_modulation_ablation_100e.sh
 - dataset yelp2018；
 - seed 2026；
 - epochs 100；
-- patience 1000；
+- 全局 Recall@20 early-stopping patience 20；
 - lr 0.0005；
 - init weight 0.01；
 - T=20；
