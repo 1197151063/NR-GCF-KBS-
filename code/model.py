@@ -229,7 +229,7 @@ class NRGCF(RecModel):
             # Backward-compatible alias used by the first stage-two pilot.
             self.representation_modulation_mode = 'original_stage_two'
         valid_modulation_modes = {
-            'none', 'legacy_always', 'original_always',
+            'none', 'legacy_always', 'original_always', 'blend_always',
             'original_stage_two', 'reliability_weighted_always',
             'reliability_weighted_stage_two',
         }
@@ -237,6 +237,11 @@ class NRGCF(RecModel):
             raise ValueError(
                 'Unsupported representation modulation mode: '
                 + str(self.representation_modulation_mode)
+            )
+        if (self.representation_modulation_mode == 'blend_always'
+                and not 0.0 <= float(self.lambda_) <= 1.0):
+            raise ValueError(
+                'blend_always requires lambda_ within [0, 1]'
             )
         self.modulation_ramp_epochs = int(
             config.get('representation_modulation_ramp_epochs', 0)
@@ -246,7 +251,7 @@ class NRGCF(RecModel):
         self.modulation_filtering_epoch = None
         self.modulation_active = (
             self.representation_modulation_mode in (
-                'legacy_always', 'original_always',
+                'legacy_always', 'original_always', 'blend_always',
                 'reliability_weighted_always',
             )
         )
@@ -301,7 +306,7 @@ class NRGCF(RecModel):
         message-passing edge weights.
         """
         if self.representation_modulation_mode in (
-                'none', 'legacy_always', 'original_always'):
+                'none', 'legacy_always', 'original_always', 'blend_always'):
             return
         weighted = (
             self.representation_modulation_mode in (
@@ -346,7 +351,7 @@ class NRGCF(RecModel):
         if not self.modulation_active:
             return
         if self.representation_modulation_mode in (
-                'legacy_always', 'original_always',
+                'legacy_always', 'original_always', 'blend_always',
                 'reliability_weighted_always'):
             self.modulation_progress = 1.0
             return
@@ -409,7 +414,23 @@ class NRGCF(RecModel):
         return {
             'active': bool(self.modulation_active),
             'progress': float(self.modulation_progress),
-            'effective_strength': float(self.modulation_progress),
+            'effective_strength': float(
+                self.modulation_progress * (
+                    self.lambda_
+                    if self.representation_modulation_mode == 'blend_always'
+                    else 1.0
+                )
+            ),
+            'operator': (
+                'crossnorm_propagation_blend'
+                if self.representation_modulation_mode == 'blend_always'
+                else 'direct_crossnorm'
+            ),
+            'crossnorm_blend_weight': (
+                float(self.lambda_)
+                if self.representation_modulation_mode == 'blend_always'
+                else None
+            ),
             'user_block_rms': user_rms,
             'item_block_rms': item_rms,
             'user_embedding_divisor': item_rms,
@@ -429,7 +450,11 @@ class NRGCF(RecModel):
             modulation_strength = self.modulation_progress
             if modulation_strength != 0.0:
                 x_c = self.cross_norm(x)
-                if modulation_strength == 1.0:
+                if self.representation_modulation_mode == 'blend_always':
+                    # Paper-style sensitivity operator.  This is opt-in and
+                    # does not alter the main original_always direct operator.
+                    x = self.lambda_ * x_c + (1.0 - self.lambda_) * x
+                elif modulation_strength == 1.0:
                     # Exact released implementation requested by the project:
                     # propagate -> direct cross_norm -> layer aggregation.
                     x = x_c

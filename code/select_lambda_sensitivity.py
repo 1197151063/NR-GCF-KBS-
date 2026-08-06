@@ -1,11 +1,11 @@
-"""Select the best active fusion lambda for each synthetic-noise ratio.
+"""Select the best fusion or modulation weight for each noise ratio.
 
 Here lambda is the structural weight in the structure--momentum risk:
 
     risk = lambda * (1 - structure_rank) + (1 - lambda) * momentum_rank
 
-It is intentionally not the legacy ``--lambda_`` field, which is ignored by
-the direct always-on CrossNorm implementation used in the current method.
+For modulation sensitivity, the selected field is the active ``--lambda_`` in
+the explicit ``blend_always`` mode.
 """
 
 import argparse
@@ -19,6 +19,25 @@ from pathlib import Path
 RECALL_METRICS = {
     "best_recall_at_20": "best_ndcg_at_20",
     "best_post_filter_recall_at_20": "best_post_filter_ndcg_at_20",
+}
+
+PARAMETERS = {
+    "fusion": {
+        "field": "structure_weight",
+        "expected_mode": "original_always",
+        "semantics": (
+            "structure weight in risk=lambda*(1-structure_rank)"
+            "+(1-lambda)*momentum_rank"
+        ),
+    },
+    "modulation": {
+        "field": "representation_modulation_lambda",
+        "expected_mode": "blend_always",
+        "semantics": (
+            "CrossNorm weight in x=lambda*cross_norm(propagated_x)"
+            "+(1-lambda)*propagated_x"
+        ),
+    },
 }
 
 
@@ -59,20 +78,25 @@ def _lambda_key(value):
     return float(value)
 
 
-def analyze(report, recall_metric, strict_complete=True):
+def analyze(report, recall_metric, parameter="fusion", strict_complete=True):
     if recall_metric not in RECALL_METRICS:
         raise ValueError("Unsupported selection metric: %s" % recall_metric)
     ndcg_metric = RECALL_METRICS[recall_metric]
+    if parameter not in PARAMETERS:
+        raise ValueError("Unsupported parameter: %s" % parameter)
+    parameter_config = PARAMETERS[parameter]
     grouped = defaultdict(list)
     identities = set()
 
     for row in report.get("runs", []):
         if row.get("mode") != "hard_structure_momentum":
             continue
+        if row.get("representation_modulation_mode") != parameter_config["expected_mode"]:
+            continue
         run_name = row.get("run") or "<unknown>"
         dataset = str(row.get("dataset"))
         ratio = _ratio_key(row.get("requested_noise_ratio"))
-        active_lambda = _lambda_key(row.get("structure_weight"))
+        active_lambda = _lambda_key(row.get(parameter_config["field"]))
         seed = int(row.get("seed"))
         identity = (dataset, ratio, active_lambda, seed)
         if identity in identities:
@@ -120,7 +144,7 @@ def analyze(report, recall_metric, strict_complete=True):
             "dataset": dataset,
             "requested_noise_ratio": ratio,
             "lambda": active_lambda,
-            "lambda_semantics": "edge_reliability_structure_weight",
+            "lambda_semantics": parameter_config["semantics"],
             "seeds": [item["seed"] for item in rows],
             "recall_at_20": _aggregate(recalls),
             "ndcg_at_20": _aggregate(ndcgs),
@@ -182,14 +206,8 @@ def analyze(report, recall_metric, strict_complete=True):
 
     return {
         "schema_version": "nrgcf_lambda_sensitivity_v1",
-        "lambda_semantics": (
-            "active structure weight in risk=lambda*(1-structure_rank)"
-            "+(1-lambda)*momentum_rank"
-        ),
-        "legacy_lambda_note": (
-            "The legacy --lambda_ field is fixed and ignored by "
-            "original_always direct CrossNorm."
-        ),
+        "parameter": parameter,
+        "lambda_semantics": parameter_config["semantics"],
         "selection_split": "test",
         "selection_metric": recall_metric,
         "selection_ndcg_tiebreak": ndcg_metric,
@@ -202,8 +220,9 @@ def markdown_table(analysis):
     lines = [
         "# Lambda sensitivity",
         "",
-        "Here lambda is the active structural fusion weight, not the ignored "
-        "legacy `--lambda_` field.",
+        "Parameter: `%s`." % analysis["parameter"],
+        "",
+        analysis["lambda_semantics"],
         "",
         "| Dataset | Noise ratio | Lambda | Seeds | Recall@20 | NDCG@20 | "
         "Removed | Selected |",
@@ -250,6 +269,11 @@ def main():
     parser.add_argument("--output", required=True, help="compact JSON output")
     parser.add_argument("--markdown", default=None, help="optional Markdown table")
     parser.add_argument(
+        "--parameter",
+        choices=sorted(PARAMETERS),
+        default="fusion",
+    )
+    parser.add_argument(
         "--selection-metric",
         choices=sorted(RECALL_METRICS),
         default="best_recall_at_20",
@@ -267,6 +291,7 @@ def main():
     analysis = analyze(
         report,
         recall_metric=args.selection_metric,
+        parameter=args.parameter,
         strict_complete=not args.allow_incomplete,
     )
 

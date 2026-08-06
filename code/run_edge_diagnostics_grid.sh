@@ -81,7 +81,7 @@ Optional variables:
                           hard_structure_momentum
                           (default: current)
   REPRESENTATION_MODULATION_MODE
-                          none, legacy_always, original_always,
+                          none, legacy_always, original_always, blend_always,
                           original_stage_two, reliability_weighted_always,
                           paper_stage_two (alias), or
                           reliability_weighted_stage_two
@@ -89,8 +89,8 @@ Optional variables:
   REPRESENTATION_MODULATION_RAMP_EPOCHS
                           post-filter linear transition length (default: 0)
   REPRESENTATION_MODULATION_LAMBDA
-                          legacy recorded config in [0,1]; direct NRGCF
-                          cross_norm modes ignore it (default: 1)
+                          propagation/CrossNorm blend weight in [0,1] used by
+                          blend_always; direct modes ignore it (default: 1)
   SUMMARY_ONLY            1: write compact reliability JSON and no per-edge
                           CSV/Parquet (default: 0)
   KEEP_EDGE_LABELS        retain the temporary synthetic-label CSV (default: 1)
@@ -237,6 +237,7 @@ done
 if [[ "$representation_modulation_mode" != "none" && \
       "$representation_modulation_mode" != "legacy_always" && \
       "$representation_modulation_mode" != "original_always" && \
+      "$representation_modulation_mode" != "blend_always" && \
       "$representation_modulation_mode" != "original_stage_two" && \
       "$representation_modulation_mode" != "paper_stage_two" && \
       "$representation_modulation_mode" != "reliability_weighted_always" && \

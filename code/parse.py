@@ -42,8 +42,13 @@ def parse_args():
 
     parser.add_argument('--tau', type=float, default=0.1,
                         help="the temperature for softmax in loss function")  # 0.1
-    parser.add_argument('--lambda_', type=float, default=1,
-                        help="legacy compatibility parameter; NRGCF stage-two direct cross_norm does not use lambda")
+    parser.add_argument(
+        '--lambda_', type=float, default=1,
+        help=(
+            'propagation/CrossNorm blend weight used only by blend_always; '
+            'direct NRGCF CrossNorm modes ignore it'
+        ),
+    )
     parser.add_argument(
         '--representation-modulation-mode',
         type=str,
@@ -52,6 +57,7 @@ def parse_args():
             'none',
             'legacy_always',
             'original_always',
+            'blend_always',
             'original_stage_two',
             'paper_stage_two',
             'reliability_weighted_always',
@@ -61,6 +67,8 @@ def parse_args():
             'none disables modulation; legacy_always/original_always apply '
             'the supplied direct cross_norm from epoch one; original_stage_two activates the '
             'released direct cross_norm operation only after filtering; '
+            'blend_always applies lambda_*cross_norm(x)+(1-lambda_)*x '
+            'from epoch one for the modulation-weight sensitivity study; '
             'paper_stage_two is a backward-compatible alias; '
             'reliability_weighted_always keeps cross_norm active throughout '
             'and changes only its RMS estimator after filtering; '

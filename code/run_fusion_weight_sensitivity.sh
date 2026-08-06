@@ -7,7 +7,7 @@ set -euo pipefail
 #             + (1 - lambda) * momentum_rank(e)
 #
 # Experimental matrix (default):
-#   noise ratio: 0, 0.1, 0.2, 0.3, 0.4, 0.5
+#   noise ratio: 0, 0.2
 #   lambda:      0, 0.2, 0.4, 0.6, 0.8, 0.9, 0.95, 1.0
 #   seed:        2026
 #
@@ -19,11 +19,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 dataset="${DATASET:-yelp2018}"
-noise_ratios="${NOISE_RATIOS:-0 0.1 0.2 0.3 0.4 0.5}"
+noise_ratios="${NOISE_RATIOS:-0 0.2}"
 lambda_values="${LAMBDA_VALUES:-0.00 0.20 0.40 0.60 0.80 0.90 0.95 1.00}"
 seeds="${SEEDS:-2026}"
 gpu_id="${GPU_ID:-0}"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/lambda_sensitivity}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/hyperparameter_sensitivity/fusion_weight}"
 dry_run="${DRY_RUN:-0}"
 skip_completed="${SKIP_COMPLETED:-1}"
 
@@ -89,7 +89,7 @@ lambda_tag() {
 total_runs=$((${#ratio_array[@]} * ${#lambda_array[@]} * ${#seed_array[@]}))
 run_index=0
 
-echo "NR-GCF lambda sensitivity"
+echo "NR-GCF structure--momentum fusion-weight sensitivity"
 echo "  dataset:          $dataset"
 echo "  noise ratios:     $noise_ratios"
 echo "  active lambdas:   $lambda_values"
@@ -186,6 +186,7 @@ python3 "$script_dir/select_lambda_sensitivity.py" \
   --input "$output_root/lambda_grid_runs.json" \
   --output "$output_root/best_lambda_by_noise.json" \
   --markdown "$output_root/lambda_sensitivity_table.md" \
+  --parameter fusion \
   --selection-metric "${SELECTION_METRIC:-best_recall_at_20}"
 
 echo "Lambda sensitivity completed."

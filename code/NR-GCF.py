@@ -380,14 +380,23 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 }
                 current_policy['representation_modulation'] = {
                     'mode': world.args.representation_modulation_mode,
-                    'lambda': None,
-                    'lambda_note': 'ignored by direct NRGCF cross_norm',
+                    'lambda': (
+                        float(world.lambda_)
+                        if world.args.representation_modulation_mode
+                        == 'blend_always' else None
+                    ),
+                    'lambda_note': (
+                        'active propagation/CrossNorm blend weight'
+                        if world.args.representation_modulation_mode
+                        == 'blend_always'
+                        else 'ignored by direct NRGCF cross_norm'
+                    ),
                     'ramp_epochs': int(
                         world.args.representation_modulation_ramp_epochs
                     ),
                     'stage_one_modulation_active': (
                         world.args.representation_modulation_mode in (
-                            'legacy_always', 'original_always',
+                            'legacy_always', 'original_always', 'blend_always',
                             'reliability_weighted_always',
                         )
                     ),
@@ -555,14 +564,23 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 }
             policy['representation_modulation'] = {
                 'mode': world.args.representation_modulation_mode,
-                'lambda': None,
-                'lambda_note': 'ignored by direct NRGCF cross_norm',
+                'lambda': (
+                    float(world.lambda_)
+                    if world.args.representation_modulation_mode
+                    == 'blend_always' else None
+                ),
+                'lambda_note': (
+                    'active propagation/CrossNorm blend weight'
+                    if world.args.representation_modulation_mode
+                    == 'blend_always'
+                    else 'ignored by direct NRGCF cross_norm'
+                ),
                 'ramp_epochs': int(
                     world.args.representation_modulation_ramp_epochs
                 ),
                 'stage_one_modulation_active': (
                     world.args.representation_modulation_mode in (
-                        'legacy_always', 'original_always',
+                        'legacy_always', 'original_always', 'blend_always',
                         'reliability_weighted_always',
                     )
                 ),

@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v9"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v10"
 
 
 def _require_torch():
@@ -807,7 +807,7 @@ def write_reliability_summary(
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
-            "representation_modulation": "Configured separately: original_always applies direct cross_norm from epoch one; reliability_weighted_always preserves that operator and changes only its frozen RMS estimator after filtering.",
+            "representation_modulation": "Configured separately: original_always applies direct cross_norm from epoch one; blend_always is an opt-in sensitivity mode that interpolates normalized and ordinary propagation outputs; reliability_weighted_always changes only the frozen RMS estimator after filtering.",
         },
         "feature_definitions": {
             "structure": "Arithmetic mean of the finite user-side/item-side leave-one-edge-out MinHash two-hop scores; a single available side is used on sparse edges.",
@@ -960,14 +960,26 @@ def write_training_summary(
         "representation_modulation": {
             "mode": str(representation_modulation_mode),
             "ramp_epochs": int(representation_modulation_ramp_epochs),
-            "lambda": None,
-            "lambda_note": "Ignored by NRGCF direct cross_norm modes; retained only as a legacy CLI/config field.",
+            "lambda": (
+                float(representation_modulation_lambda)
+                if representation_modulation_mode == "blend_always"
+                else None
+            ),
+            "lambda_note": (
+                "Active weight in lambda*cross_norm(x)+(1-lambda)*x."
+                if representation_modulation_mode == "blend_always"
+                else "Ignored by NRGCF direct cross_norm modes; retained only as a legacy CLI/config field."
+            ),
             "stage_one": (
                 "ordinary LightGCN propagation without modulation"
                 if representation_modulation_mode in (
                     "none", "original_stage_two", "paper_stage_two",
                     "reliability_weighted_stage_two"
-                ) else "direct unweighted cross_norm from epoch one"
+                ) else (
+                    "lambda-weighted CrossNorm/propagation blend from epoch one"
+                    if representation_modulation_mode == "blend_always"
+                    else "direct unweighted cross_norm from epoch one"
+                )
             ),
             "stage_two_scale_estimator": (
                 "disabled"
@@ -983,8 +995,8 @@ def write_training_summary(
             ),
             "scale_definition": (
                 "sqrt(weighted_mean(node_embedding_squared_l2_norm) + 1e-6); "
-                "uncapped and applied directly after every propagation layer, "
-                "matching the released cross_norm implementation"
+                "uncapped; blend_always interpolates CrossNorm and ordinary "
+                "propagation, while direct modes replace propagation output"
             ),
             "trace": representation_modulation_trace,
         },
