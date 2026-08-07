@@ -6,8 +6,8 @@ cross-dataset NR-GCF experiments.
 ## Protocol
 
 - Source `train.txt` and `valid.txt` are merged into NR-GCF `train.txt`.
-- Source `test.txt` remains the test split.  No test interaction is removed,
-  relocated, or used for training.
+- The converted test split retains only interactions whose user and item both
+  occur in the merged training graph.  Retained interactions keep source order.
 - Released numeric user and item IDs are preserved without remapping.  The IDs
   are globally zero-based and contiguous in both datasets.
 - Source files contain one `user item 1` triple per line.  NR-GCF files contain
@@ -19,23 +19,25 @@ The deterministic NR-GCF training-edge order is grouped by user.  Within each
 user, source training items keep their order and source validation items are
 appended in their original order.
 
-## Important test cold-start property
+## Test cold-start filtering
 
-Keeping the test split unchanged leaves test-only items:
+Cold-start interactions are removed only after train and validation have been
+merged.  The source files remain untouched; the converted NR-GCF test files use
+the following training-closed protocol:
 
-| Dataset | Merged train edges | Test edges | Test-only items | Affected test edges |
-|---|---:|---:|---:|---:|
-| LastFM | 73,458 | 18,321 | 2,247 | 2,376 |
-| MovieLens-1M | 671,630 | 164,848 | 26 | 29 |
+| Dataset | Merged train | Source test | Filtered cold edges | Converted test | Test users removed entirely |
+|---|---:|---:|---:|---:|---:|
+| LastFM | 73,458 | 18,321 | 2,376 | 15,945 | 4 |
+| MovieLens-1M | 671,630 | 164,848 | 29 | 164,819 | 0 |
 
-NR-GCF allocates embeddings for these globally valid item IDs, but they have no
-training-edge propagation.  They are intentionally retained because the chosen
-protocol requires an unchanged test split.  This differs from loaders that
-silently skip entities unseen in training and should be disclosed when comparing
-numbers across codebases.
+LastFM filtering removes 2,247 training-unseen item IDs; MovieLens-1M removes 26.
+Neither dataset has a training-unseen test user, but four LastFM users lose all
+test interactions because all of their test items are cold.  Those users are not
+included in NR-GCF's Recall/NDCG denominator.
 
 Each dataset's `conversion_metadata.json` records source and converted SHA-256
-hashes, counts, overlap checks, ID checks, and cold-start counts.
+hashes, source/retained counts, overlap checks, ID checks, and the complete
+cold-start filtering audit.
 
 ## Reproduce the conversion
 

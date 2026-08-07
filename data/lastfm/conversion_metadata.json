@@ -2,14 +2,14 @@
   "converted": {
     "test": {
       "duplicate_interaction_count": 0,
-      "interaction_count": 18321,
-      "item_count": 6372,
-      "item_id_max": 17387,
+      "interaction_count": 15945,
+      "item_count": 4125,
+      "item_id_max": 15140,
       "item_id_min": 0,
       "path": "test.txt",
-      "sha256": "0f0a15e3de2f868554ee1e32190c51db3e0ad0c4138e1428c66ba6de86102755",
-      "unique_interaction_count": 18321,
-      "user_count": 1863,
+      "sha256": "187b1ead16517a4bd1c07a7692faa512b23213772501d24c32da0dda56234288",
+      "unique_interaction_count": 15945,
+      "user_count": 1859,
       "user_id_max": 1884,
       "user_id_min": 0
     },
@@ -27,25 +27,25 @@
       "user_id_min": 0
     }
   },
-  "dataset": "lastfm",
-  "destination_format": "one user_id followed by all item_ids per line",
-  "global_item_ids": {
-    "count": 17388,
-    "max": 17387,
+  "converted_global_item_ids": {
+    "count": 15141,
+    "max": 15140,
     "min": 0,
     "missing_within_range": 0,
     "zero_based_contiguous": true
   },
-  "global_user_ids": {
+  "converted_global_user_ids": {
     "count": 1885,
     "max": 1884,
     "min": 0,
     "missing_within_range": 0,
     "zero_based_contiguous": true
   },
+  "dataset": "lastfm",
+  "destination_format": "one user_id followed by all item_ids per line",
   "id_policy": "preserve released NT-SSM integer IDs without remapping",
   "nrgcf_edge_order": "users follow source train first-occurrence order; within each user, source train items precede source valid items",
-  "schema_version": "nrgcf-ntssm-conversion-v1",
+  "schema_version": "nrgcf-ntssm-conversion-v2",
   "source": {
     "test": {
       "duplicate_interaction_count": 0,
@@ -88,24 +88,48 @@
     }
   },
   "source_format": "one user_id item_id implicit_value triple per line",
+  "source_global_item_ids": {
+    "count": 17388,
+    "max": 17387,
+    "min": 0,
+    "missing_within_range": 0,
+    "zero_based_contiguous": true
+  },
+  "source_global_user_ids": {
+    "count": 1885,
+    "max": 1884,
+    "min": 0,
+    "missing_within_range": 0,
+    "zero_based_contiguous": true
+  },
   "split_overlap_counts": {
     "train_test": 0,
     "train_valid": 0,
     "valid_test": 0
   },
-  "test_cold_start": {
-    "interaction_count": 2376,
-    "item_count": 2247,
-    "policy": "retained exactly as requested; NR-GCF allocates these item IDs but they receive no training-edge propagation",
-    "user_count": 0
+  "test_cold_start_filter": {
+    "definition": "remove source test pair (u,i) when u is absent from merged train or i is absent from merged train",
+    "filtered_cold_item_count": 2247,
+    "filtered_cold_user_count": 0,
+    "filtered_due_to_both_count": 0,
+    "filtered_due_to_item_only_count": 2376,
+    "filtered_due_to_user_only_count": 0,
+    "filtered_interaction_count": 2376,
+    "retained_interaction_count": 15945,
+    "retained_test_user_count": 1859,
+    "source_interaction_count": 18321,
+    "source_test_item_count": 6372,
+    "source_test_user_count": 1863,
+    "users_losing_all_test_interactions": 4
   },
-  "test_policy": "all source test interactions preserved; no filtering or relocation",
+  "test_policy": "retain a source test interaction only when both user and item occur in merged train; preserve retained source order",
   "train_policy": "pair union of source train and valid; within each user, train order then valid order; no deduplication occurred",
   "validation": {
     "converted_duplicate_count": 0,
     "merged_train_pair_equivalent": true,
     "numeric_ids_preserved": true,
+    "retained_test_sequence_preserved": true,
     "source_duplicate_count": 0,
-    "test_sequence_equivalent": true
+    "test_training_closed": true
   }
 }

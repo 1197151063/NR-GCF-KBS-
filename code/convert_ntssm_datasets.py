@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Convert NT-SSM triple splits to the grouped NR-GCF data format.
 
-The conversion deliberately merges only ``train.txt`` and ``valid.txt``.
-Every source test interaction is retained in ``test.txt``.  Numeric IDs are
-preserved, and the converter rejects malformed input, duplicate interactions,
-split overlap, or non-contiguous global IDs instead of silently changing the
-evaluation protocol.
+The conversion merges ``train.txt`` and ``valid.txt`` and then makes the test
+split training-closed: a test interaction is retained only when both endpoint
+IDs occur in the merged training graph.  Numeric IDs are preserved, and the
+converter rejects malformed input, duplicate interactions, split overlap, or
+non-contiguous global IDs instead of silently repairing the source data.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 Pair = Tuple[int, int]
 SUPPORTED_DATASETS = ("lastfm", "ml-1m")
-SCHEMA_VERSION = "nrgcf-ntssm-conversion-v1"
+SCHEMA_VERSION = "nrgcf-ntssm-conversion-v2"
 
 
 @dataclass(frozen=True)
@@ -181,11 +181,26 @@ def convert_dataset(source_dir: Path, output_dir: Path, dataset: str) -> Path:
     # All source training users appear before validation is appended in the
     # released data.  Ordered grouping therefore gives stable NR-GCF edge IDs:
     # user order follows train, and validation items follow that user's train
-    # items.  Test is grouped independently and never filtered.
+    # items.
     train_grouped = group_pairs(splits["train"].pairs)
     for user_id, item_id in splits["valid"].pairs:
         train_grouped.setdefault(user_id, []).append(item_id)
-    test_grouped = group_pairs(splits["test"].pairs)
+
+    merged_users = {user for user, _ in merged_pairs}
+    merged_items = {item for _, item in merged_pairs}
+    retained_test_pairs = tuple(
+        (user, item)
+        for user, item in splits["test"].pairs
+        if user in merged_users and item in merged_items
+    )
+    filtered_test_pairs = tuple(
+        (user, item)
+        for user, item in splits["test"].pairs
+        if user not in merged_users or item not in merged_items
+    )
+    if not retained_test_pairs:
+        raise ValueError(f"{dataset}: cold-start filtering removed the entire test split")
+    test_grouped = group_pairs(retained_test_pairs)
 
     destination = output_dir / dataset
     destination_train = destination / "train.txt"
@@ -197,20 +212,33 @@ def convert_dataset(source_dir: Path, output_dir: Path, dataset: str) -> Path:
     converted_test = read_grouped_pairs(destination_test)
     if set(converted_train) != set(merged_pairs) or len(converted_train) != len(merged_pairs):
         raise AssertionError(f"{dataset}: converted train is not pair-equivalent")
-    if converted_test != splits["test"].pairs:
+    if converted_test != retained_test_pairs:
         raise AssertionError(
-            f"{dataset}: converted test does not preserve source interaction order"
+            f"{dataset}: converted test does not match the training-closed source test"
         )
 
-    merged_users = {user for user, _ in converted_train}
-    merged_items = {item for _, item in converted_train}
-    test_users = {user for user, _ in converted_test}
-    test_items = {item for _, item in converted_test}
-    cold_test_pairs = [
-        (user, item)
-        for user, item in converted_test
-        if user not in merged_users or item not in merged_items
-    ]
+    source_test_users = {user for user, _ in splits["test"].pairs}
+    source_test_items = {item for _, item in splits["test"].pairs}
+    retained_test_users = {user for user, _ in converted_test}
+    filtered_cold_users = {
+        user for user, _ in filtered_test_pairs if user not in merged_users
+    }
+    filtered_cold_items = {
+        item for _, item in filtered_test_pairs if item not in merged_items
+    }
+    filtered_due_to_user_only = sum(
+        user not in merged_users and item in merged_items
+        for user, item in filtered_test_pairs
+    )
+    filtered_due_to_item_only = sum(
+        user in merged_users and item not in merged_items
+        for user, item in filtered_test_pairs
+    )
+    filtered_due_to_both = sum(
+        user not in merged_users and item not in merged_items
+        for user, item in filtered_test_pairs
+    )
+    converted_global_pairs = converted_train + converted_test
 
     metadata = {
         "schema_version": SCHEMA_VERSION,
@@ -222,7 +250,10 @@ def convert_dataset(source_dir: Path, output_dir: Path, dataset: str) -> Path:
             "pair union of source train and valid; within each user, train order "
             "then valid order; no deduplication occurred"
         ),
-        "test_policy": "all source test interactions preserved; no filtering or relocation",
+        "test_policy": (
+            "retain a source test interaction only when both user and item occur "
+            "in merged train; preserve retained source order"
+        ),
         "nrgcf_edge_order": (
             "users follow source train first-occurrence order; within each user, "
             "source train items precede source valid items"
@@ -248,20 +279,41 @@ def convert_dataset(source_dir: Path, output_dir: Path, dataset: str) -> Path:
                 **_split_stats(converted_test),
             },
         },
-        "global_user_ids": user_contiguity,
-        "global_item_ids": item_contiguity,
-        "test_cold_start": {
-            "user_count": len(test_users - merged_users),
-            "item_count": len(test_items - merged_items),
-            "interaction_count": len(cold_test_pairs),
-            "policy": (
-                "retained exactly as requested; NR-GCF allocates these item IDs but "
-                "they receive no training-edge propagation"
+        "source_global_user_ids": user_contiguity,
+        "source_global_item_ids": item_contiguity,
+        "converted_global_user_ids": _contiguity(
+            user for user, _ in converted_global_pairs
+        ),
+        "converted_global_item_ids": _contiguity(
+            item for _, item in converted_global_pairs
+        ),
+        "test_cold_start_filter": {
+            "definition": (
+                "remove source test pair (u,i) when u is absent from merged train "
+                "or i is absent from merged train"
             ),
+            "source_interaction_count": len(splits["test"].pairs),
+            "retained_interaction_count": len(converted_test),
+            "filtered_interaction_count": len(filtered_test_pairs),
+            "filtered_cold_user_count": len(filtered_cold_users),
+            "filtered_cold_item_count": len(filtered_cold_items),
+            "filtered_due_to_user_only_count": filtered_due_to_user_only,
+            "filtered_due_to_item_only_count": filtered_due_to_item_only,
+            "filtered_due_to_both_count": filtered_due_to_both,
+            "source_test_user_count": len(source_test_users),
+            "retained_test_user_count": len(retained_test_users),
+            "users_losing_all_test_interactions": len(
+                source_test_users - retained_test_users
+            ),
+            "source_test_item_count": len(source_test_items),
         },
         "validation": {
             "merged_train_pair_equivalent": True,
-            "test_sequence_equivalent": True,
+            "test_training_closed": all(
+                user in merged_users and item in merged_items
+                for user, item in converted_test
+            ),
+            "retained_test_sequence_preserved": True,
             "numeric_ids_preserved": True,
             "source_duplicate_count": 0,
             "converted_duplicate_count": 0,
@@ -304,10 +356,10 @@ def main() -> None:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         train_count = metadata["converted"]["train"]["interaction_count"]
         test_count = metadata["converted"]["test"]["interaction_count"]
-        cold_items = metadata["test_cold_start"]["item_count"]
+        filtered = metadata["test_cold_start_filter"]["filtered_interaction_count"]
         print(
             f"{dataset}: train={train_count}, test={test_count}, "
-            f"cold_test_items={cold_items}, metadata={metadata_path}"
+            f"filtered_cold_test_interactions={filtered}, metadata={metadata_path}"
         )
 
 

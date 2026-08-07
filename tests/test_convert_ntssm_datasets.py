@@ -14,7 +14,7 @@ from convert_ntssm_datasets import convert_dataset, read_grouped_pairs
 
 
 class ConvertNtssmDatasetsTest(unittest.TestCase):
-    def test_merge_train_valid_and_preserve_test(self):
+    def test_merge_train_valid_and_filter_cold_test_endpoints(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source" / "lastfm"
@@ -26,9 +26,9 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             (source / "valid.txt").write_text(
                 "0 2 1\n1 3 1\n", encoding="utf-8"
             )
-            # Item 4 is deliberately test-only.  It must not be dropped.
+            # Item 4 and user 2 are deliberately training-unseen.
             (source / "test.txt").write_text(
-                "0 3 1\n1 4 1\n", encoding="utf-8"
+                "0 3 1\n1 4 1\n2 0 1\n", encoding="utf-8"
             )
 
             metadata_path = convert_dataset(
@@ -41,13 +41,19 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             )
             self.assertEqual(
                 read_grouped_pairs(destination / "lastfm" / "test.txt"),
-                ((0, 3), (1, 4)),
+                ((0, 3),),
             )
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             self.assertEqual(metadata["converted"]["train"]["interaction_count"], 5)
-            self.assertEqual(metadata["converted"]["test"]["interaction_count"], 2)
-            self.assertEqual(metadata["test_cold_start"]["item_count"], 1)
-            self.assertTrue(metadata["validation"]["test_sequence_equivalent"])
+            self.assertEqual(metadata["converted"]["test"]["interaction_count"], 1)
+            cold_filter = metadata["test_cold_start_filter"]
+            self.assertEqual(cold_filter["filtered_interaction_count"], 2)
+            self.assertEqual(cold_filter["filtered_cold_user_count"], 1)
+            self.assertEqual(cold_filter["filtered_cold_item_count"], 1)
+            self.assertEqual(cold_filter["filtered_due_to_user_only_count"], 1)
+            self.assertEqual(cold_filter["filtered_due_to_item_only_count"], 1)
+            self.assertEqual(cold_filter["filtered_due_to_both_count"], 0)
+            self.assertTrue(metadata["validation"]["test_training_closed"])
 
     def test_duplicate_source_interaction_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
