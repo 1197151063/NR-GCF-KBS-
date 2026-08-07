@@ -12,29 +12,16 @@ from model import NRGCF,RecModel
 from utils import init_logger, print_log, write_final_log
 
 
-if world.config['dataset'] == 'yelp2018':
-    config = {
-        'init':'normal',#NORMAL DISTRIBUTION
-        'init_weight':world.init_weight,#INIT WEIGHT
-        'dim':64,#EMBEDDING_SIZE
-        'decay':world.decay,#L2_NORM
-        'K':3,
-        'beta':0.8,#BETA
-        'lambda': world.lambda_,
-        'lr':world.lr,#LEARNING_RATE
-    }
-
-if world.config['dataset'] == 'amazon-book':
-    config = {
-        'init':'normal',#NORMAL DISTRIBUTION
-        'init_weight':world.init_weight,#INIT WEIGHT
-        'dim':64,#EMBEDDING_SIZE
-        'decay':world.decay,#L2_NORM
-        'K':3,
-        'beta':0.8,#BETA
-        'lambda': world.lambda_,
-        'lr':world.lr,#LEARNING_RATE
-    }
+config = {
+    'init':'normal',#NORMAL DISTRIBUTION
+    'init_weight':world.init_weight,#INIT WEIGHT
+    'dim':64,#EMBEDDING_SIZE
+    'decay':world.decay,#L2_NORM
+    'K':3,
+    'beta':0.8,#BETA
+    'lambda': world.lambda_,
+    'lr':world.lr,#LEARNING_RATE
+}
 
 config['representation_modulation_mode'] = (
     world.args.representation_modulation_mode

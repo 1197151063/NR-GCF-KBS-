@@ -66,6 +66,29 @@ echo "  fusion weight:     $fusion_weight"
 echo "  modulation weight: $modulation_weight"
 echo "  output:             $output_root"
 
+if [[ "${DRY_RUN:-0}" != "1" ]]; then
+  CUDA_VISIBLE_DEVICES="$gpu_id" python - <<'PY'
+import sys
+
+try:
+    import torch
+except ImportError as error:
+    raise SystemExit(
+        "PyTorch import failed for %s: %s\nActivate the training environment "
+        "before launching this script." % (sys.executable, error)
+    )
+
+print("Python executable: %s" % sys.executable)
+print("PyTorch version: %s" % torch.__version__)
+print("CUDA available: %s" % torch.cuda.is_available())
+if not torch.cuda.is_available():
+    raise SystemExit(
+        "CUDA is unavailable to the same Python interpreter that will run NR-GCF."
+    )
+print("Visible GPU: %s" % torch.cuda.get_device_name(0))
+PY
+fi
+
 for dataset in $datasets; do
   if [[ ! -f "$script_dir/../data/$dataset/conversion_metadata.json" ]]; then
     echo "Missing converted dataset metadata: data/$dataset/conversion_metadata.json" >&2
