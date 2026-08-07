@@ -86,3 +86,18 @@ Either modify the command in
 or copy it out and execute it manually:
 
 > python NR-GCF.py  --dataset yelp2018  --lr 5e-4  --init_weight 0.01 --patience 20 --lambda_ 0.6
+
+## Converted NT-SSM datasets
+
+The repository also contains `lastfm` and `ml-1m` in NR-GCF's grouped format.
+For both datasets, the released NT-SSM train and validation splits are merged
+for training while every released test interaction is kept in test.  Conversion
+counts, hashes, ID checks, and the retained test cold-start items are documented
+in [`data/NTSSM_CONVERSION.md`](data/NTSSM_CONVERSION.md) and each dataset's
+`conversion_metadata.json`.
+
+The one-seed clean/20%-replacement transfer pilot can be launched with:
+
+```bash
+bash code/run_ntssm_dataset_generalization_v2_3.sh
+```
