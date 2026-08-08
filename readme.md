@@ -91,8 +91,8 @@ or copy it out and execute it manually:
 
 The repository also contains `lastfm` and `ml-1m` in NR-GCF's grouped format.
 For both datasets, the released NT-SSM train and validation splits are merged
-for training, then test interactions with a training-unseen user or item are
-filtered.  Conversion counts, hashes, ID checks, and the cold-start audit are documented
+for training while the complete released test split, including cold-start
+items, is preserved.  Conversion counts, hashes, ID checks, and the cold-start audit are documented
 in [`data/NTSSM_CONVERSION.md`](data/NTSSM_CONVERSION.md) and each dataset's
 `conversion_metadata.json`.
 

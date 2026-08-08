@@ -6,8 +6,8 @@ cross-dataset NR-GCF experiments.
 ## Protocol
 
 - Source `train.txt` and `valid.txt` are merged into NR-GCF `train.txt`.
-- The converted test split retains only interactions whose user and item both
-  occur in the merged training graph.  Retained interactions keep source order.
+- The converted test split preserves every released source test interaction and
+  its order.  Cold-start interactions are retained by default.
 - Released numeric user and item IDs are preserved without remapping.  The IDs
   are globally zero-based and contiguous in both datasets.
 - Source files contain one `user item 1` triple per line.  NR-GCF files contain
@@ -19,25 +19,24 @@ The deterministic NR-GCF training-edge order is grouped by user.  Within each
 user, source training items keep their order and source validation items are
 appended in their original order.
 
-## Test cold-start filtering
+## Test cold-start audit
 
-Cold-start interactions are removed only after train and validation have been
-merged.  The source files remain untouched; the converted NR-GCF test files use
-the following training-closed protocol:
+Cold-start status is computed only after train and validation have been merged.
+The committed NR-GCF test files retain these interactions:
 
-| Dataset | Merged train | Source test | Filtered cold edges | Converted test | Test users removed entirely |
-|---|---:|---:|---:|---:|---:|
-| LastFM | 73,458 | 18,321 | 2,376 | 15,945 | 4 |
-| MovieLens-1M | 671,630 | 164,848 | 29 | 164,819 | 0 |
+| Dataset | Merged train | Source/converted test | Retained cold edges | Training-unseen test items |
+|---|---:|---:|---:|---:|
+| LastFM | 73,458 | 18,321 | 2,376 | 2,247 |
+| MovieLens-1M | 671,630 | 164,848 | 29 | 26 |
 
-LastFM filtering removes 2,247 training-unseen item IDs; MovieLens-1M removes 26.
-Neither dataset has a training-unseen test user, but four LastFM users lose all
-test interactions because all of their test items are cold.  Those users are not
-included in NR-GCF's Recall/NDCG denominator.
+Neither dataset contains a training-unseen test user.  NR-GCF allocates the
+globally valid test item IDs, but cold items receive no training-edge propagation.
+The metadata makes this protocol explicit so filtered and unfiltered results are
+not mixed.
 
 Each dataset's `conversion_metadata.json` records source and converted SHA-256
-hashes, source/retained counts, overlap checks, ID checks, and the complete
-cold-start filtering audit.
+hashes, source/converted counts, overlap checks, ID checks, and the cold-start
+audit.
 
 ## Reproduce the conversion
 
@@ -48,6 +47,9 @@ python3 code/convert_ntssm_datasets.py \
   --source-root /path/to/NT-SSM/dataset \
   --output-root data
 ```
+
+For a separate training-closed diagnostic conversion, add
+`--filter-cold-start`.  This option is not used by the committed datasets.
 
 The converter rejects malformed triples, duplicate pairs, split overlap, and
 non-contiguous global IDs rather than choosing a silent repair policy.

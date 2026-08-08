@@ -14,7 +14,7 @@ from convert_ntssm_datasets import convert_dataset, read_grouped_pairs
 
 
 class ConvertNtssmDatasetsTest(unittest.TestCase):
-    def test_merge_train_valid_and_filter_cold_test_endpoints(self):
+    def test_merge_train_valid_and_preserve_cold_test_by_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source" / "lastfm"
@@ -41,19 +41,43 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             )
             self.assertEqual(
                 read_grouped_pairs(destination / "lastfm" / "test.txt"),
-                ((0, 3),),
+                ((0, 3), (1, 4), (2, 0)),
             )
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             self.assertEqual(metadata["converted"]["train"]["interaction_count"], 5)
-            self.assertEqual(metadata["converted"]["test"]["interaction_count"], 1)
-            cold_filter = metadata["test_cold_start_filter"]
-            self.assertEqual(cold_filter["filtered_interaction_count"], 2)
-            self.assertEqual(cold_filter["filtered_cold_user_count"], 1)
-            self.assertEqual(cold_filter["filtered_cold_item_count"], 1)
-            self.assertEqual(cold_filter["filtered_due_to_user_only_count"], 1)
-            self.assertEqual(cold_filter["filtered_due_to_item_only_count"], 1)
-            self.assertEqual(cold_filter["filtered_due_to_both_count"], 0)
-            self.assertTrue(metadata["validation"]["test_training_closed"])
+            self.assertEqual(metadata["converted"]["test"]["interaction_count"], 3)
+            cold = metadata["test_cold_start"]
+            self.assertEqual(cold["mode"], "retain")
+            self.assertEqual(cold["cold_interaction_count"], 2)
+            self.assertEqual(cold["retained_cold_interaction_count"], 2)
+            self.assertEqual(cold["filtered_interaction_count"], 0)
+            self.assertEqual(cold["cold_user_count"], 1)
+            self.assertEqual(cold["cold_item_count"], 1)
+            self.assertFalse(metadata["validation"]["test_training_closed"])
+            self.assertTrue(
+                metadata["validation"]["source_test_sequence_equivalent"]
+            )
+
+            filtered_destination = root / "filtered_destination"
+            filtered_metadata_path = convert_dataset(
+                root / "source",
+                filtered_destination,
+                "lastfm",
+                filter_cold_start=True,
+            )
+            self.assertEqual(
+                read_grouped_pairs(filtered_destination / "lastfm" / "test.txt"),
+                ((0, 3),),
+            )
+            filtered_metadata = json.loads(
+                filtered_metadata_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(filtered_metadata["test_cold_start"]["mode"], "filter")
+            self.assertEqual(
+                filtered_metadata["test_cold_start"]["filtered_interaction_count"],
+                2,
+            )
+            self.assertTrue(filtered_metadata["validation"]["test_training_closed"])
 
     def test_duplicate_source_interaction_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
