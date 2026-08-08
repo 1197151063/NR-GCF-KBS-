@@ -14,7 +14,7 @@ from convert_ntssm_datasets import convert_dataset, read_grouped_pairs
 
 
 class ConvertNtssmDatasetsTest(unittest.TestCase):
-    def test_merge_train_valid_and_filter_cold_test_by_default(self):
+    def test_exclude_validation_and_filter_cold_test_by_default(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "source" / "lastfm"
@@ -28,7 +28,7 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             )
             # Item 4 and user 2 are deliberately training-unseen.
             (source / "test.txt").write_text(
-                "0 3 1\n1 4 1\n2 0 1\n", encoding="utf-8"
+                "0 3 1\n1 1 1\n1 4 1\n2 0 1\n", encoding="utf-8"
             )
 
             metadata_path = convert_dataset(
@@ -37,22 +37,24 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
 
             self.assertEqual(
                 read_grouped_pairs(destination / "lastfm" / "train.txt"),
-                ((0, 0), (0, 1), (0, 2), (1, 2), (1, 3)),
+                ((0, 0), (0, 1), (1, 2)),
             )
             self.assertEqual(
                 read_grouped_pairs(destination / "lastfm" / "test.txt"),
-                ((0, 3),),
+                ((1, 1),),
             )
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            self.assertEqual(metadata["converted"]["train"]["interaction_count"], 5)
+            self.assertEqual(metadata["converted"]["train"]["interaction_count"], 3)
             self.assertEqual(metadata["converted"]["test"]["interaction_count"], 1)
+            self.assertEqual(metadata["validation_policy"], "excluded")
+            self.assertTrue(metadata["validation"]["source_validation_excluded"])
             cold = metadata["test_cold_start"]
             self.assertEqual(cold["mode"], "filter")
-            self.assertEqual(cold["cold_interaction_count"], 2)
+            self.assertEqual(cold["cold_interaction_count"], 3)
             self.assertEqual(cold["retained_cold_interaction_count"], 0)
-            self.assertEqual(cold["filtered_interaction_count"], 2)
+            self.assertEqual(cold["filtered_interaction_count"], 3)
             self.assertEqual(cold["cold_user_count"], 1)
-            self.assertEqual(cold["cold_item_count"], 1)
+            self.assertEqual(cold["cold_item_count"], 2)
             self.assertTrue(metadata["validation"]["test_training_closed"])
             self.assertFalse(metadata["validation"]["source_test_sequence_equivalent"])
 
@@ -65,7 +67,7 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             )
             self.assertEqual(
                 read_grouped_pairs(retained_destination / "lastfm" / "test.txt"),
-                ((0, 3), (1, 4), (2, 0)),
+                ((0, 3), (1, 1), (1, 4), (2, 0)),
             )
             retained_metadata = json.loads(
                 retained_metadata_path.read_text(encoding="utf-8")
@@ -73,9 +75,29 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
             self.assertEqual(retained_metadata["test_cold_start"]["mode"], "retain")
             self.assertEqual(
                 retained_metadata["test_cold_start"]["retained_cold_interaction_count"],
-                2,
+                3,
             )
             self.assertFalse(retained_metadata["validation"]["test_training_closed"])
+
+            merged_destination = root / "merged_destination"
+            merged_metadata_path = convert_dataset(
+                root / "source",
+                merged_destination,
+                "lastfm",
+                merge_validation=True,
+            )
+            self.assertEqual(
+                read_grouped_pairs(merged_destination / "lastfm" / "train.txt"),
+                ((0, 0), (0, 1), (0, 2), (1, 2), (1, 3)),
+            )
+            self.assertEqual(
+                read_grouped_pairs(merged_destination / "lastfm" / "test.txt"),
+                ((0, 3), (1, 1)),
+            )
+            merged_metadata = json.loads(
+                merged_metadata_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(merged_metadata["validation_policy"], "merged_into_train")
 
     def test_duplicate_source_interaction_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

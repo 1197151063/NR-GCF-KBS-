@@ -2,34 +2,34 @@
   "converted": {
     "test": {
       "duplicate_interaction_count": 0,
-      "interaction_count": 15945,
-      "item_count": 4125,
-      "item_id_max": 15140,
+      "interaction_count": 15778,
+      "item_count": 3990,
+      "item_id_max": 13965,
       "item_id_min": 0,
       "path": "test.txt",
-      "sha256": "187b1ead16517a4bd1c07a7692faa512b23213772501d24c32da0dda56234288",
-      "unique_interaction_count": 15945,
-      "user_count": 1859,
+      "sha256": "c733ecb4cca8d8d1ba909a632d0d78a8316a4c8200b907be5d170f18a4b64633",
+      "unique_interaction_count": 15778,
+      "user_count": 1858,
       "user_id_max": 1884,
       "user_id_min": 0
     },
     "train": {
       "duplicate_interaction_count": 0,
-      "interaction_count": 73458,
-      "item_count": 15141,
-      "item_id_max": 15140,
+      "interaction_count": 64315,
+      "item_count": 13973,
+      "item_id_max": 13972,
       "item_id_min": 0,
       "path": "train.txt",
-      "sha256": "6ce678ec7259bbe4598b1cf04779b058adce81e1d18a302785952cf94a28a84c",
-      "unique_interaction_count": 73458,
+      "sha256": "1845769cb1a9834692d3cf884de523d23aa126fa6b58eb5f49e9628e8c317705",
+      "unique_interaction_count": 64315,
       "user_count": 1885,
       "user_id_max": 1884,
       "user_id_min": 0
     }
   },
   "converted_global_item_ids": {
-    "count": 15141,
-    "max": 15140,
+    "count": 13973,
+    "max": 13972,
     "min": 0,
     "missing_within_range": 0,
     "zero_based_contiguous": true
@@ -44,8 +44,8 @@
   "dataset": "lastfm",
   "destination_format": "one user_id followed by all item_ids per line",
   "id_policy": "preserve released NT-SSM integer IDs without remapping",
-  "nrgcf_edge_order": "users follow source train first-occurrence order; within each user, source train items precede source valid items",
-  "schema_version": "nrgcf-ntssm-conversion-v4",
+  "nrgcf_edge_order": "users and items follow source train order",
+  "schema_version": "nrgcf-ntssm-conversion-v5",
   "source": {
     "test": {
       "duplicate_interaction_count": 0,
@@ -108,32 +108,35 @@
     "valid_test": 0
   },
   "test_cold_start": {
-    "cold_interaction_count": 2376,
-    "cold_item_count": 2247,
+    "cold_interaction_count": 2543,
+    "cold_item_count": 2382,
     "cold_user_count": 0,
-    "converted_interaction_count": 15945,
-    "definition": "source test pair (u,i) is cold when u is absent from merged train or i is absent from merged train",
+    "converted_interaction_count": 15778,
+    "definition": "source test pair (u,i) is cold when u or i is absent from the converted training split",
     "filtered_due_to_both_count": 0,
-    "filtered_due_to_item_only_count": 2376,
+    "filtered_due_to_item_only_count": 2543,
     "filtered_due_to_user_only_count": 0,
-    "filtered_interaction_count": 2376,
+    "filtered_interaction_count": 2543,
     "mode": "filter",
     "retained_cold_interaction_count": 0,
-    "retained_test_user_count": 1859,
+    "retained_test_user_count": 1858,
     "source_interaction_count": 18321,
     "source_test_item_count": 6372,
     "source_test_user_count": 1863,
-    "users_losing_all_test_interactions": 4
+    "users_losing_all_test_interactions": 5
   },
   "test_policy": "filter training-unseen user/item endpoints and preserve retained order",
-  "train_policy": "pair union of source train and valid; within each user, train order then valid order; no deduplication occurred",
+  "train_policy": "use source train only; source valid is excluded",
   "validation": {
     "converted_duplicate_count": 0,
-    "merged_train_pair_equivalent": true,
+    "converted_train_pair_equivalent": true,
     "numeric_ids_preserved": true,
     "retained_test_sequence_preserved": true,
     "source_duplicate_count": 0,
     "source_test_sequence_equivalent": false,
+    "source_validation_excluded": true,
+    "source_validation_merged_into_train": false,
     "test_training_closed": true
-  }
+  },
+  "validation_policy": "excluded"
 }
