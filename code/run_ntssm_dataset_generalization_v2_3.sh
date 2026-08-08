@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Cross-dataset transfer pilot on the converted NT-SSM LastFM and ML-1M data.
+# Cross-dataset transfer pilot on merged-split NT-SSM LastFM and the separately
+# supplied grouped MovieLens data.
 # It runs sequentially on one GPU and compares the same backbone with and
 # without the proposed hard structure--momentum filter.  Defaults intentionally
 # use one seed and clean/20% replacement noise; no per-dataset tuning is done.

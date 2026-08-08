@@ -1,43 +1,39 @@
-# NT-SSM dataset conversion
+# LastFM and MovieLens dataset preparation
 
-`lastfm/` and `ml-1m/` are converted from the released NT-SSM splits for
-cross-dataset NR-GCF experiments.
+The two datasets intentionally use different source protocols.
 
-## Protocol
+## LastFM
 
-- Source `train.txt` is the only NR-GCF training split.  Source `valid.txt` is
-  excluded completely and is not merged or evaluated.
-- The converted test split retains only interactions whose user and item both
-  occur in source train.  Retained interactions keep source order.
-- Released numeric user and item IDs are preserved without remapping.  The IDs
-  are globally zero-based and contiguous in both datasets.
-- Source files contain one `user item 1` triple per line.  NR-GCF files contain
-  one user followed by all of that user's items per line.
-- There are no duplicate interactions and no train/valid/test overlap in either
-  released dataset.
+- Source: NT-SSM `dataset/lastfm/{train,valid,test}.txt` triples.
+- Train: source train and valid are merged.
+- Test: remains the test split, then interactions with a merged-train-unseen
+  user or item are filtered.
+- IDs are preserved without remapping.
 
-The deterministic NR-GCF training-edge order is the released source train order
-grouped by user.
+LastFM has 73,458 merged training interactions.  Its source test has 18,321
+interactions; 2,376 cold interactions are filtered, leaving 15,945.
 
-## No-cold-start evaluation protocol
+## MovieLens
 
-Cold-start status is computed against source train only.  The committed NR-GCF
-test files remove cold interactions without moving them into training:
+- Source: the user-supplied `/Users/chenyijun/Desktop/KBS2026/ml_data` grouped
+  `train.txt` and `test.txt`, not the old NT-SSM ML-1M triples.
+- Train/test are already in NR-GCF grouped format and are imported without ID
+  remapping.
+- No validation split exists in this supplied version.
+- The supplied test already has no cold-start interaction, so filtering removes
+  zero edges.
 
-| Dataset | Train | Valid excluded | Source test | Removed cold edges | Converted test |
-|---|---:|---:|---:|---:|---:|
-| LastFM | 64,315 | 9,143 | 18,321 | 2,543 | 15,778 |
-| MovieLens-1M | 590,733 | 80,897 | 164,848 | 34 | 164,814 |
+MovieLens contains 6,022 users, 3,043 items, 796,244 train interactions, and
+99,455 test interactions.  Train and test have no duplicates or overlap.
 
-Neither dataset contains a training-unseen test user.  LastFM removes 2,382
-training-unseen item IDs and MovieLens-1M removes 31.  Five LastFM users lose all
-test interactions because every one of their test items is cold; they therefore
-do not enter the Recall/NDCG denominator.  Validation and test interactions are
-never added to train.
+## Shared guarantees
 
-Each dataset's `conversion_metadata.json` records source and converted SHA-256
-hashes, source/converted counts, overlap checks, ID checks, and the cold-start
-audit.
+- Test interactions are never moved into train.
+- Converted test is training-closed.
+- Edge order is deterministic.
+- Each `conversion_metadata.json` records source/converted SHA-256 hashes,
+  counts, overlap checks, ID checks, cold-start audit, and the dataset-specific
+  protocol.
 
 ## Reproduce the conversion
 
@@ -46,15 +42,13 @@ From the NR-GCF repository root:
 ```bash
 python3 code/convert_ntssm_datasets.py \
   --source-root /path/to/NT-SSM/dataset \
+  --movielens-source-root /path/to/ml_data \
   --output-root data
 ```
 
 For a separate diagnostic conversion that deliberately retains cold-start test
 interactions, add `--retain-cold-start`.  This option is not used by the
 committed datasets.
-
-To reproduce the previous train+valid protocol for diagnostics, add
-`--merge-validation`.  This option is also not used by the committed datasets.
 
 The converter rejects malformed triples, duplicate pairs, split overlap, and
 non-contiguous global IDs rather than choosing a silent repair policy.

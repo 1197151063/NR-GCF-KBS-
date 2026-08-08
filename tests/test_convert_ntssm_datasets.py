@@ -10,7 +10,11 @@ import sys
 
 sys.path.insert(0, str(CODE_ROOT))
 
-from convert_ntssm_datasets import convert_dataset, read_grouped_pairs
+from convert_ntssm_datasets import (
+    convert_dataset,
+    import_grouped_dataset,
+    read_grouped_pairs,
+)
 
 
 class ConvertNtssmDatasetsTest(unittest.TestCase):
@@ -122,6 +126,34 @@ class ConvertNtssmDatasetsTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "overlap"):
                 convert_dataset(root / "source", root / "destination", "lastfm")
+
+    def test_import_grouped_movielens_and_verify_training_closure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "ml_data"
+            source.mkdir()
+            (source / "train.txt").write_text(
+                "0 0 1\n1 1 2\n", encoding="utf-8"
+            )
+            (source / "test.txt").write_text(
+                "0 2\n1 0 3\n2 1\n", encoding="utf-8"
+            )
+
+            metadata_path = import_grouped_dataset(
+                source, root / "output", "ml-1m"
+            )
+            self.assertEqual(
+                read_grouped_pairs(root / "output" / "ml-1m" / "train.txt"),
+                ((0, 0), (0, 1), (1, 1), (1, 2)),
+            )
+            self.assertEqual(
+                read_grouped_pairs(root / "output" / "ml-1m" / "test.txt"),
+                ((0, 2), (1, 0)),
+            )
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["validation_policy"], "not_present")
+            self.assertEqual(metadata["test_cold_start"]["cold_interaction_count"], 2)
+            self.assertTrue(metadata["validation"]["test_training_closed"])
 
 
 if __name__ == "__main__":

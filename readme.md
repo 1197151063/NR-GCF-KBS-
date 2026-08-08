@@ -90,9 +90,10 @@ or copy it out and execute it manually:
 ## Converted NT-SSM datasets
 
 The repository also contains `lastfm` and `ml-1m` in NR-GCF's grouped format.
-For both datasets, only the released NT-SSM train split is used for training;
-validation is excluded, and test interactions with a train-unseen user or item
-are filtered.  Conversion counts, hashes, ID checks, and the cold-start audit are documented
+LastFM merges the NT-SSM train/valid splits and filters cold test interactions.
+MovieLens uses the separately supplied grouped `ml_data` train/test files as its
+source; that test split already contains no cold interaction.  Counts, hashes,
+ID checks, and protocol details are documented
 in [`data/NTSSM_CONVERSION.md`](data/NTSSM_CONVERSION.md) and each dataset's
 `conversion_metadata.json`.
 
