@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Convert NT-SSM triple splits to the grouped NR-GCF data format.
 
-The conversion merges ``train.txt`` and ``valid.txt`` and preserves every test
-interaction by default.  An explicit option can produce a training-closed test
-split for protocol diagnostics.  Numeric IDs are preserved, and the converter
-rejects malformed input, duplicate interactions, split overlap, or
-non-contiguous global IDs instead of silently repairing the source data.
+The conversion merges ``train.txt`` and ``valid.txt`` and produces a
+training-closed test split by default: test interactions are retained only when
+both endpoints occur in merged train.  An explicit diagnostic option can retain
+cold-start interactions.  Numeric IDs are preserved, and the converter rejects
+malformed input, duplicate interactions, split overlap, or non-contiguous
+global IDs instead of silently repairing the source data.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 Pair = Tuple[int, int]
 SUPPORTED_DATASETS = ("lastfm", "ml-1m")
-SCHEMA_VERSION = "nrgcf-ntssm-conversion-v3"
+SCHEMA_VERSION = "nrgcf-ntssm-conversion-v4"
 
 
 @dataclass(frozen=True)
@@ -147,7 +148,7 @@ def convert_dataset(
     source_dir: Path,
     output_dir: Path,
     dataset: str,
-    filter_cold_start: bool = False,
+    filter_cold_start: bool = True,
 ) -> Path:
     source_paths = {
         split: source_dir / dataset / f"{split}.txt"
@@ -366,11 +367,11 @@ def parse_args() -> argparse.Namespace:
         default=list(SUPPORTED_DATASETS),
     )
     parser.add_argument(
-        "--filter-cold-start",
+        "--retain-cold-start",
         action="store_true",
         help=(
-            "drop test interactions whose user or item is absent from merged train; "
-            "default preserves the complete source test split"
+            "diagnostic override: retain test interactions whose user or item is "
+            "absent from merged train; default filters them"
         ),
     )
     return parser.parse_args()
@@ -383,7 +384,7 @@ def main() -> None:
             args.source_root,
             args.output_root,
             dataset,
-            filter_cold_start=args.filter_cold_start,
+            filter_cold_start=not args.retain_cold_start,
         )
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         train_count = metadata["converted"]["train"]["interaction_count"]

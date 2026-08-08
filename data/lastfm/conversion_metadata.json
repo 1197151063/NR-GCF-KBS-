@@ -2,14 +2,14 @@
   "converted": {
     "test": {
       "duplicate_interaction_count": 0,
-      "interaction_count": 18321,
-      "item_count": 6372,
-      "item_id_max": 17387,
+      "interaction_count": 15945,
+      "item_count": 4125,
+      "item_id_max": 15140,
       "item_id_min": 0,
       "path": "test.txt",
-      "sha256": "0f0a15e3de2f868554ee1e32190c51db3e0ad0c4138e1428c66ba6de86102755",
-      "unique_interaction_count": 18321,
-      "user_count": 1863,
+      "sha256": "187b1ead16517a4bd1c07a7692faa512b23213772501d24c32da0dda56234288",
+      "unique_interaction_count": 15945,
+      "user_count": 1859,
       "user_id_max": 1884,
       "user_id_min": 0
     },
@@ -28,8 +28,8 @@
     }
   },
   "converted_global_item_ids": {
-    "count": 17388,
-    "max": 17387,
+    "count": 15141,
+    "max": 15140,
     "min": 0,
     "missing_within_range": 0,
     "zero_based_contiguous": true
@@ -45,7 +45,7 @@
   "destination_format": "one user_id followed by all item_ids per line",
   "id_policy": "preserve released NT-SSM integer IDs without remapping",
   "nrgcf_edge_order": "users follow source train first-occurrence order; within each user, source train items precede source valid items",
-  "schema_version": "nrgcf-ntssm-conversion-v3",
+  "schema_version": "nrgcf-ntssm-conversion-v4",
   "source": {
     "test": {
       "duplicate_interaction_count": 0,
@@ -111,21 +111,21 @@
     "cold_interaction_count": 2376,
     "cold_item_count": 2247,
     "cold_user_count": 0,
-    "converted_interaction_count": 18321,
+    "converted_interaction_count": 15945,
     "definition": "source test pair (u,i) is cold when u is absent from merged train or i is absent from merged train",
     "filtered_due_to_both_count": 0,
-    "filtered_due_to_item_only_count": 0,
+    "filtered_due_to_item_only_count": 2376,
     "filtered_due_to_user_only_count": 0,
-    "filtered_interaction_count": 0,
-    "mode": "retain",
-    "retained_cold_interaction_count": 2376,
-    "retained_test_user_count": 1863,
+    "filtered_interaction_count": 2376,
+    "mode": "filter",
+    "retained_cold_interaction_count": 0,
+    "retained_test_user_count": 1859,
     "source_interaction_count": 18321,
     "source_test_item_count": 6372,
     "source_test_user_count": 1863,
-    "users_losing_all_test_interactions": 0
+    "users_losing_all_test_interactions": 4
   },
-  "test_policy": "preserve every source test interaction and its order",
+  "test_policy": "filter training-unseen user/item endpoints and preserve retained order",
   "train_policy": "pair union of source train and valid; within each user, train order then valid order; no deduplication occurred",
   "validation": {
     "converted_duplicate_count": 0,
@@ -133,7 +133,7 @@
     "numeric_ids_preserved": true,
     "retained_test_sequence_preserved": true,
     "source_duplicate_count": 0,
-    "source_test_sequence_equivalent": true,
-    "test_training_closed": false
+    "source_test_sequence_equivalent": false,
+    "test_training_closed": true
   }
 }
