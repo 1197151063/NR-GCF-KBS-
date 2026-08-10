@@ -34,7 +34,10 @@ def parse_args():
 
     parser.add_argument('--dropout', type=float, default=1e-1)
 
-    parser.add_argument('--num_neg', type=int, default=64)
+    parser.add_argument(
+        '--num_neg', type=int, default=1024,
+        help='number of uniformly sampled items per positive for SSM (default: 1024)',
+    )
 
     parser.add_argument('--init_weight', type=float, default=1.0)
 
@@ -42,6 +45,22 @@ def parse_args():
 
     parser.add_argument('--tau', type=float, default=0.1,
                         help="the temperature for softmax in loss function")  # 0.1
+    parser.add_argument(
+        '--training-objective', type=str, default='bpr',
+        choices=['bpr', 'ssm', 'au'],
+        help=(
+            'optimization objective: original BPR+L2, sampled-softmax SSM, '
+            'or alignment-uniformity (default: bpr)'
+        ),
+    )
+    parser.add_argument(
+        '--au-uniformity-weight', type=float, default=1.0,
+        help='coefficient on the bilateral uniformity term in AU (default: 1)',
+    )
+    parser.add_argument(
+        '--au-uniformity-t', type=float, default=2.0,
+        help='temperature t in log E exp(-t * pairwise_distance^2) (default: 2)',
+    )
     parser.add_argument(
         '--lambda_', type=float, default=1,
         help=(

@@ -27,6 +27,12 @@ patience = args.patience
 
 num_neg = args.num_neg
 
+training_objective = args.training_objective
+
+au_uniformity_weight = args.au_uniformity_weight
+
+au_uniformity_t = args.au_uniformity_t
+
 dropout_rate = args.dropout
 
 decay = args.decay

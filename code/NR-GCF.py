@@ -21,6 +21,11 @@ config = {
     'beta':0.8,#BETA
     'lambda': world.lambda_,
     'lr':world.lr,#LEARNING_RATE
+    'training_objective': world.training_objective,
+    'num_neg': world.num_neg,
+    'tau': world.tau,
+    'au_uniformity_weight': world.au_uniformity_weight,
+    'au_uniformity_t': world.au_uniformity_t,
 }
 
 config['representation_modulation_mode'] = (
@@ -105,6 +110,23 @@ seed_runtime(world.seed)
 device = world.device
 if world.patience < 1:
     raise ValueError('--patience must be a positive integer')
+if world.training_objective == 'ssm':
+    if world.num_neg < 1:
+        raise ValueError('--num_neg must be positive for SSM')
+    if world.tau <= 0:
+        raise ValueError('--tau must be positive for SSM')
+if world.training_objective == 'au':
+    if world.au_uniformity_weight < 0:
+        raise ValueError('--au-uniformity-weight must be non-negative')
+    if world.au_uniformity_t <= 0:
+        raise ValueError('--au-uniformity-t must be positive')
+if (world.training_objective != 'bpr'
+        and world.args.edge_filter_mode != 'none'):
+    raise ValueError(
+        'SSM/AU objective pilots require --edge-filter-mode none so the '
+        'ranking objective and graph filtering are not changed together. '
+        'Their integration with edge reliability must be evaluated separately.'
+    )
 if (world.args.export_edge_diagnostics
         and world.args.edge_filter_mode != 'current'):
     raise ValueError(
@@ -172,6 +194,7 @@ model = NRGCF(num_users=num_users,
                  num_items=num_items,
                  edge_index=train_edge_index,
                  config=config).to(device)
+print_log('Training objective: ' + str(model.objective_metadata()))
 opt = torch.optim.Adam(params=model.parameters(),lr=config['lr'])
 edge_loss_history = None
 if world.args.export_edge_diagnostics:
@@ -399,6 +422,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     ),
                     'scale_definition': 'uncapped_cross_type_rms',
                 }
+                current_policy['training_objective'] = (
+                    model.objective_metadata()
+                )
                 repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 write_reliability_summary(
                     output_dir=world.args.edge_reliability_dir,
@@ -493,7 +519,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             del filtered_train_edge_index
         else:
             # Pilot policies are frozen at their configured filtering point.
-            # They never alter the BPR loss formula or add a stage-two norm.
+            # They never alter the configured objective or add a stage-two norm.
             from edge_reliability import (
                 build_reliability_policy,
                 write_reliability_summary,
@@ -586,6 +612,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 ),
                 'scale_definition': 'uncapped_cross_type_rms',
             }
+            policy['training_objective'] = model.objective_metadata()
             repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             write_reliability_summary(
                 output_dir=world.args.edge_reliability_dir,
@@ -638,8 +665,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 del propagation_weight
             else:
                 print_log(
-                    'Stage-two none applied: graph, positive sampling, BPR '
-                    'objective, and evaluation mask are unchanged.'
+                    'Stage-two none applied: graph, positive sampling, '
+                    f'{world.training_objective.upper()} objective, and '
+                    'evaluation mask are unchanged.'
                 )
             user_modulation_weight = None
             item_modulation_weight = None
@@ -769,6 +797,7 @@ if (world.args.edge_filter_mode != 'current'
             adaptive_filtering_controller.trace
             if adaptive_filtering_controller is not None else None
         ),
+        training_objective=model.objective_metadata(),
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

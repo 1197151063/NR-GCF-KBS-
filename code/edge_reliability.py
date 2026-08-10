@@ -823,6 +823,10 @@ def write_reliability_summary(
         "adaptive_filtering": policy.get("adaptive_filtering"),
         "momentum_semantics": policy.get("momentum_semantics"),
         "representation_modulation": policy.get("representation_modulation"),
+        "training_objective": policy.get("training_objective", {
+            "name": "bpr",
+            "description": "Mean pairwise BPR softplus plus ego-embedding L2.",
+        }),
         "thresholds": {
             "momentum_high": policy["momentum_threshold"],
             "available_side_structure_low": policy["structure_threshold"],
@@ -837,7 +841,15 @@ def write_reliability_summary(
             "hard_structure_momentum": "Use stable EMA loss to calibrate an adaptive consensus budget, cap it by max_removal_ratio, then remove that many highest structure-dominant fused-risk edges without connectivity constraints.",
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
-            "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",
+            "optimization_objective": (
+                policy.get("training_objective", {}).get(
+                    "description",
+                    "Mean pairwise BPR softplus plus ego-embedding L2.",
+                )
+            ),
+            "reliability_weighting": (
+                "Reliability never weights the configured optimization objective."
+            ),
             "representation_modulation": "Configured separately: original_always applies direct cross_norm from epoch one; blend_always is an opt-in sensitivity mode that interpolates normalized and ordinary propagation outputs; reliability_weighted_always changes only the frozen RMS estimator after filtering.",
         },
         "feature_definitions": {
@@ -940,8 +952,14 @@ def write_training_summary(
         best_post_filter_recall, best_post_filter_ndcg,
         early_stopping_patience, early_stopped, early_stopping_wait,
         filtering_schedule, configured_filtering_epoch,
-        actual_filtering_epoch, adaptive_filtering_trace):
+        actual_filtering_epoch, adaptive_filtering_trace,
+        training_objective=None):
     """Write the compact outcome for a completed or early-stopped run."""
+    if training_objective is None:
+        training_objective = {
+            "name": "bpr",
+            "description": "Mean pairwise BPR softplus plus ego-embedding L2.",
+        }
     report = {
         "schema_version": SCHEMA_VERSION,
         "mode": mode,
@@ -986,8 +1004,11 @@ def write_training_summary(
         ),
         "final_training_loss": float(final_loss),
         "propagation_edge_count": int(propagation_edge_count),
+        "positive_training_edge_count": int(bpr_positive_edge_count),
+        # Retained for schema compatibility with existing experiment bundles.
         "bpr_positive_edge_count": int(bpr_positive_edge_count),
-        "objective": "Original NR-GCF BPR plus L2; reliability does not weight the loss.",
+        "objective": training_objective["description"],
+        "training_objective": training_objective,
         "representation_modulation": {
             "mode": str(representation_modulation_mode),
             "ramp_epochs": int(representation_modulation_ramp_epochs),

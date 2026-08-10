@@ -36,6 +36,7 @@ def summarize(root):
         adaptive_filtering = reliability.get("adaptive_filtering") or {}
         filtering_timing = training.get("filtering_timing") or {}
         early_stopping = training.get("early_stopping") or {}
+        training_objective = training.get("training_objective") or {}
         parameters = reliability.get("parameters") or {}
         adaptive_trace = adaptive_filtering.get("trace") or []
         trigger_snapshot = adaptive_trace[-1] if adaptive_trace else {}
@@ -43,6 +44,8 @@ def summarize(root):
             "run": str(reliability_path.parent.parent.relative_to(root)),
             "dataset": reliability.get("dataset"),
             "mode": reliability.get("mode"),
+            "training_objective": training_objective.get("name", "bpr"),
+            "training_objective_metadata": training_objective,
             "seed": reliability.get("seed"),
             "requested_noise_ratio": reliability.get("requested_noise_ratio"),
             "filtering_epoch": reliability.get("filtering_epoch"),

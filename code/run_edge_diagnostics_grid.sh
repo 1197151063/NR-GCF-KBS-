@@ -76,6 +76,11 @@ Optional variables:
   TRAIN_PATIENCE          optional early-stopping patience override
   TRAIN_LR                optional learning-rate override
   TRAIN_INIT_WEIGHT       optional embedding initialization std override
+  TRAINING_OBJECTIVE      bpr, ssm, or au (default: bpr)
+  SSM_NUM_NEG             uniformly sampled negatives for SSM (default: 1024)
+  SSM_TAU                 SSM cosine-softmax temperature (default: 0.1)
+  AU_UNIFORMITY_WEIGHT    coefficient on bilateral uniformity (default: 1)
+  AU_UNIFORMITY_T         pairwise uniformity temperature (default: 2)
   EDGE_FILTER_MODE        current, none, hard_consensus, hard_structure_only,
                           soft_reliability, gated_soft_reliability, or
                           hard_structure_momentum
@@ -155,6 +160,11 @@ train_epochs="${TRAIN_EPOCHS:-}"
 train_patience="${TRAIN_PATIENCE:-}"
 train_lr="${TRAIN_LR:-}"
 train_init_weight="${TRAIN_INIT_WEIGHT:-}"
+training_objective="${TRAINING_OBJECTIVE:-bpr}"
+ssm_num_neg="${SSM_NUM_NEG:-1024}"
+ssm_tau="${SSM_TAU:-0.1}"
+au_uniformity_weight="${AU_UNIFORMITY_WEIGHT:-1.0}"
+au_uniformity_t="${AU_UNIFORMITY_T:-2.0}"
 edge_filter_mode="${EDGE_FILTER_MODE:-current}"
 summary_only="${SUMMARY_ONLY:-0}"
 keep_edge_labels="${KEEP_EDGE_LABELS:-1}"
@@ -192,6 +202,32 @@ if [[ "$edge_filter_mode" != "current" && "$edge_filter_mode" != "none" && \
   echo "Unsupported EDGE_FILTER_MODE: $edge_filter_mode" >&2
   exit 2
 fi
+if [[ "$training_objective" != "bpr" && \
+      "$training_objective" != "ssm" && \
+      "$training_objective" != "au" ]]; then
+  echo "TRAINING_OBJECTIVE must be bpr, ssm, or au." >&2
+  exit 2
+fi
+if [[ "$training_objective" != "bpr" && "$edge_filter_mode" != "none" ]]; then
+  echo "SSM/AU objective pilots require EDGE_FILTER_MODE=none." >&2
+  exit 2
+fi
+if ! [[ "$ssm_num_neg" =~ ^[0-9]+$ ]] || [[ "$ssm_num_neg" -lt 1 ]]; then
+  echo "SSM_NUM_NEG must be a positive integer." >&2
+  exit 2
+fi
+python3 - "$ssm_tau" "$au_uniformity_weight" "$au_uniformity_t" <<'PY'
+import math
+import sys
+
+tau, weight, uniformity_t = map(float, sys.argv[1:])
+if not math.isfinite(tau) or tau <= 0:
+    raise SystemExit("SSM_TAU must be finite and positive")
+if not math.isfinite(weight) or weight < 0:
+    raise SystemExit("AU_UNIFORMITY_WEIGHT must be finite and non-negative")
+if not math.isfinite(uniformity_t) or uniformity_t <= 0:
+    raise SystemExit("AU_UNIFORMITY_T must be finite and positive")
+PY
 if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
    [[ "$reliability_filter_epoch" -lt 2 ]]; then
   echo "RELIABILITY_FILTER_EPOCH must be an integer >= 2." >&2
@@ -630,6 +666,12 @@ echo "  seeds:      $seeds"
 echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
+echo "  training objective: $training_objective"
+if [[ "$training_objective" == "ssm" ]]; then
+  echo "  SSM negatives/tau: ${ssm_num_neg}/${ssm_tau}"
+elif [[ "$training_objective" == "au" ]]; then
+  echo "  AU uniformity weight/t: ${au_uniformity_weight}/${au_uniformity_t}"
+fi
 echo "  reliability filter epoch: $reliability_filter_epoch"
 echo "  reliability filter schedule: $reliability_filter_schedule"
 if [[ "$reliability_filter_schedule" == "adaptive" ]]; then
@@ -668,6 +710,9 @@ for ratio in $noise_ratios; do
     fi
     if [[ "$edge_filter_mode" != "current" ]]; then
       run_name="${edge_filter_mode}_${run_name}"
+    fi
+    if [[ "$training_objective" != "bpr" ]]; then
+      run_name="${run_name}_obj_${training_objective}"
     fi
     if [[ "$edge_filter_mode" == "hard_structure_momentum" ]]; then
       if [[ "$reliability_filter_schedule" == "adaptive" ]]; then
@@ -744,6 +789,11 @@ for ratio in $noise_ratios; do
       --dataset "$dataset"
       --seed "$seed"
       --requested-noise-ratio "$ratio"
+      --training-objective "$training_objective"
+      --num_neg "$ssm_num_neg"
+      --tau "$ssm_tau"
+      --au-uniformity-weight "$au_uniformity_weight"
+      --au-uniformity-t "$au_uniformity_t"
       --edge-filter-mode "$edge_filter_mode"
       --edge-diagnostics-structural-mode "$structural_mode"
       --edge-diagnostics-topk "$topk"
@@ -810,6 +860,11 @@ for ratio in $noise_ratios; do
       echo "stop_after_filter=$stop_after_filter"
       echo "replacement_selection=$replacement_selection"
       echo "edge_filter_mode=$edge_filter_mode"
+      echo "training_objective=$training_objective"
+      echo "ssm_num_neg=$ssm_num_neg"
+      echo "ssm_tau=$ssm_tau"
+      echo "au_uniformity_weight=$au_uniformity_weight"
+      echo "au_uniformity_t=$au_uniformity_t"
       echo "reliability_filter_epoch=$reliability_filter_epoch"
       echo "reliability_filter_schedule=$reliability_filter_schedule"
       echo "reliability_adaptive_min_epoch=$reliability_adaptive_min_epoch"

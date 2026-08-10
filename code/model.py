@@ -120,28 +120,40 @@ class RecModel(MessagePassing):
         return self.config['decay'] * regularization
 
     def ssm_loss(self,edge_label_index:LongTensor):
-        user_emb,item_emb = self.forward(edge_index=None)
-        neg_edge_index = torch.randint(0, self.num_items,(edge_label_index[1].numel(),world.num_neg), device=device)
-        embedding = torch.cat([user_emb[edge_label_index[0]],
-                               item_emb[edge_label_index[1]],
-                               item_emb[neg_edge_index].view(-1, item_emb.size(-1))])
-        regularization = self.config['decay'] * (1/2) * embedding.norm(p=2).pow(2)/ edge_label_index.size(1)
-        user_emb = user_emb[edge_label_index[0]]
-        pos_item_emb = item_emb[edge_label_index[1]]
-        neg_item_emb = item_emb[neg_edge_index]
-        user_emb = F.normalize(user_emb, dim=-1)
-        item_emb = torch.cat([pos_item_emb.unsqueeze(1), neg_item_emb], dim=1)
-        item_emb = F.normalize(item_emb, dim=-1)
-        # user_emb = self.dropout(user_emb)
-        y_pred = torch.bmm(item_emb, user_emb.unsqueeze(-1)).squeeze(-1)
-        pos_logits = torch.exp(y_pred[:, 0] / self.config['tau']) 
-        neg_logits = torch.exp(y_pred[:, 1:]/ self.config['tau']) 
-        Ng = neg_logits.sum(dim=-1)
-        loss = (- torch.log(pos_logits / Ng))
+        user_all,item_all = self.forward(edge_index=self.edge_index)
+        batch_size = edge_label_index[1].numel()
+        neg_edge_index = torch.randint(
+            0, self.num_items,
+            (batch_size, int(self.config['num_neg'])),
+            device=user_all.device,
+        )
+        user_emb = user_all[edge_label_index[0]]
+        pos_item_emb = item_all[edge_label_index[1]]
+        neg_item_emb = item_all[neg_edge_index]
+        # This is algebraically identical to the supplied concatenation-based
+        # L2 term, without materializing a second copy of all sampled vectors.
+        regularization = self.config['decay'] * 0.5 * (
+            user_emb.pow(2).sum()
+            + pos_item_emb.pow(2).sum()
+            + neg_item_emb.pow(2).sum()
+        ) / batch_size
+        user_normalized = F.normalize(user_emb, dim=-1)
+        pos_normalized = F.normalize(pos_item_emb, dim=-1)
+        neg_normalized = F.normalize(neg_item_emb, dim=-1)
+        pos_similarity = (user_normalized * pos_normalized).sum(dim=-1)
+        neg_similarity = torch.bmm(
+            neg_normalized, user_normalized.unsqueeze(-1)
+        ).squeeze(-1)
+        tau = float(self.config['tau'])
+        # logsumexp(negative/tau) - positive/tau is the stable exact form of
+        # -log(exp(positive/tau) / sum(exp(negative/tau))).  The supplied SSM
+        # denominator intentionally excludes the positive logit.
+        loss = torch.logsumexp(neg_similarity / tau, dim=-1)
+        loss = loss - pos_similarity / tau
         return loss.mean() + regularization
     
     def alignment_loss(self,edge_label_index:LongTensor):
-        user_emb,item_emb = self.forward(edge_index=None)
+        user_emb,item_emb = self.forward(edge_index=self.edge_index)
         user_emb = user_emb[edge_label_index[0]]
         item_emb = item_emb[edge_label_index[1]]
         user_emb = F.normalize(user_emb, dim=-1)
@@ -150,13 +162,31 @@ class RecModel(MessagePassing):
     
     def uniformity(self,x, t=2):
         x = F.normalize(x, dim=-1)
+        if x.size(0) < 2:
+            return x.sum() * 0.0
         return torch.pdist(x, p=2).pow(2).mul(-t).exp().mean().log()
     
     def uniformity_loss(self,edge_label_index:LongTensor):
-        user_emb,item_emb = self.forward(edge_index=None)
+        user_emb,item_emb = self.forward(edge_index=self.edge_index)
         user_emb = user_emb[edge_label_index[0]]
         item_emb = item_emb[edge_label_index[1]]
-        return   (self.uniformity(user_emb) + self.uniformity(item_emb))
+        return (
+            self.uniformity(user_emb, t=self.config['au_uniformity_t'])
+            + self.uniformity(item_emb, t=self.config['au_uniformity_t'])
+        )
+
+    def au_loss(self, edge_label_index:LongTensor):
+        user_all, item_all = self.forward(edge_index=self.edge_index)
+        user_emb = user_all[edge_label_index[0]]
+        item_emb = item_all[edge_label_index[1]]
+        user_normalized = F.normalize(user_emb, dim=-1)
+        item_normalized = F.normalize(item_emb, dim=-1)
+        alignment = (user_normalized - item_normalized).pow(2).sum(dim=-1).mean()
+        uniformity = (
+            self.uniformity(user_emb, t=self.config['au_uniformity_t'])
+            + self.uniformity(item_emb, t=self.config['au_uniformity_t'])
+        )
+        return alignment + self.config['au_uniformity_weight'] * uniformity
     
     def message(self, x_j: Tensor) -> Tensor:
         return x_j
@@ -267,6 +297,43 @@ class NRGCF(RecModel):
         )
         self.momentum_loss = torch.zeros(edge_index.size(1)).to(device)
         self.active_edge_count = int(edge_index.size(1))
+
+    def objective_metadata(self):
+        name = str(self.config.get('training_objective', 'bpr'))
+        if name == 'bpr':
+            return {
+                'name': 'bpr',
+                'description': 'Mean pairwise BPR softplus plus ego-embedding L2.',
+                'regularization': 'ego_embedding_l2',
+            }
+        if name == 'ssm':
+            return {
+                'name': 'ssm',
+                'description': (
+                    'Sampled-softmax loss with a negative-only denominator '
+                    'and propagated-embedding L2.'
+                ),
+                'num_neg': int(self.config['num_neg']),
+                'tau': float(self.config['tau']),
+                'positive_in_denominator': False,
+                'negative_sampling': 'uniform_item_ids_with_replacement',
+                'regularization': 'sampled_propagated_embedding_l2',
+            }
+        if name == 'au':
+            return {
+                'name': 'au',
+                'description': (
+                    'Normalized positive alignment plus weighted sum of '
+                    'within-batch user and item uniformity.'
+                ),
+                'uniformity_weight': float(
+                    self.config['au_uniformity_weight']
+                ),
+                'uniformity_t': float(self.config['au_uniformity_t']),
+                'uniformity_sides': 'user_plus_item',
+                'regularization': 'none',
+            }
+        raise ValueError('Unsupported training objective: ' + name)
 
     @torch.no_grad()
     def set_training_graph(self, edge_index, edge_weight=None):
@@ -470,8 +537,14 @@ class NRGCF(RecModel):
         return user_emb, item_emb
     
     def get_loss(self,edge_label_index):
-        rank_loss = self.bpr_loss(edge_label_index) + self.l2_reg(edge_label_index)
-        return rank_loss 
+        objective = self.config.get('training_objective', 'bpr')
+        if objective == 'bpr':
+            return self.bpr_loss(edge_label_index) + self.l2_reg(edge_label_index)
+        if objective == 'ssm':
+            return self.ssm_loss(edge_label_index)
+        if objective == 'au':
+            return self.au_loss(edge_label_index)
+        raise ValueError('Unsupported training objective: ' + str(objective))
     
     @torch.no_grad()
     def get_instance_loss(self,edge_label_index:LongTensor):
