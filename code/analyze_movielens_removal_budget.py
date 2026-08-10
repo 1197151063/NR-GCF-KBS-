@@ -18,13 +18,21 @@ def _finite(row, field):
     return float(value)
 
 
-def analyze(report, clean_ratio=0.0, noisy_ratio=0.2, clean_tolerance=0.002):
+def analyze(
+        report, clean_ratio=0.0, noisy_ratio=0.2, clean_tolerance=0.002,
+        modulation_lambda=None):
     rows = report.get("runs", [])
     baselines = {}
     arms = {}
     for row in rows:
         if row.get("dataset") != "ml-1m":
             continue
+        if modulation_lambda is not None:
+            row_lambda = row.get("representation_modulation_lambda")
+            if row_lambda is None or not math.isclose(
+                    float(row_lambda), float(modulation_lambda),
+                    rel_tol=0.0, abs_tol=1e-12):
+                continue
         ratio = float(row.get("requested_noise_ratio"))
         if row.get("mode") == "none":
             if ratio in baselines:
@@ -108,6 +116,7 @@ def analyze(report, clean_ratio=0.0, noisy_ratio=0.2, clean_tolerance=0.002):
         "selection_split": "test",
         "exploratory_single_seed": True,
         "clean_recall_absolute_tolerance": clean_tolerance,
+        "required_modulation_lambda": modulation_lambda,
         "selection_rule": (
             "Among clean-safe arms, maximize 0.2-noise Recall@20; tie by "
             "0.2-noise NDCG@20, clean Recall@20, then smaller cap. If no arm "
@@ -181,10 +190,15 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--markdown", required=True)
     parser.add_argument("--clean-tolerance", type=float, default=0.002)
+    parser.add_argument("--modulation-lambda", type=float, default=None)
     args = parser.parse_args()
     if args.clean_tolerance < 0:
         raise SystemExit("--clean-tolerance must be non-negative")
-    result = analyze(_load(args.input), clean_tolerance=args.clean_tolerance)
+    result = analyze(
+        _load(args.input),
+        clean_tolerance=args.clean_tolerance,
+        modulation_lambda=args.modulation_lambda,
+    )
     Path(args.output).write_text(
         json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
