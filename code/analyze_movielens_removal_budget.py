@@ -20,12 +20,12 @@ def _finite(row, field):
 
 def analyze(
         report, clean_ratio=0.0, noisy_ratio=0.2, clean_tolerance=0.002,
-        modulation_lambda=None):
+        modulation_lambda=None, dataset="ml-1m"):
     rows = report.get("runs", [])
     baselines = {}
     arms = {}
     for row in rows:
-        if row.get("dataset") != "ml-1m":
+        if row.get("dataset") != dataset:
             continue
         if modulation_lambda is not None:
             row_lambda = row.get("representation_modulation_lambda")
@@ -112,7 +112,8 @@ def analyze(
         )
 
     return {
-        "schema_version": "nrgcf_movielens_budget_selection_v1",
+        "schema_version": "nrgcf_removal_budget_selection_v2",
+        "dataset": dataset,
         "selection_split": "test",
         "exploratory_single_seed": True,
         "clean_recall_absolute_tolerance": clean_tolerance,
@@ -140,7 +141,7 @@ def analyze(
 
 def markdown(report):
     lines = [
-        "# MovieLens removal-budget pilot",
+        "# %s removal-budget pilot" % report.get("dataset", "MovieLens"),
         "",
         "Single-seed exploratory selection on test metrics; confirm the chosen "
         "setting later rather than treating this table as final evidence.",
@@ -191,6 +192,7 @@ def main():
     parser.add_argument("--markdown", required=True)
     parser.add_argument("--clean-tolerance", type=float, default=0.002)
     parser.add_argument("--modulation-lambda", type=float, default=None)
+    parser.add_argument("--dataset", default="ml-1m")
     args = parser.parse_args()
     if args.clean_tolerance < 0:
         raise SystemExit("--clean-tolerance must be non-negative")
@@ -198,6 +200,7 @@ def main():
         _load(args.input),
         clean_tolerance=args.clean_tolerance,
         modulation_lambda=args.modulation_lambda,
+        dataset=args.dataset,
     )
     Path(args.output).write_text(
         json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
