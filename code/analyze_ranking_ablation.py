@@ -6,8 +6,11 @@ import math
 from pathlib import Path
 
 
-def analyze(report, dataset, removal_cap, modulation_lambda, weights):
+def analyze(
+        report, dataset, removal_cap, modulation_lambda, weights,
+        noise_ratios=(0.0, 0.2)):
     weights = sorted(set(float(value) for value in weights))
+    noise_ratios = sorted(set(float(value) for value in noise_ratios))
     rows = []
     seen = set()
     for row in report.get("runs", []):
@@ -30,8 +33,13 @@ def analyze(report, dataset, removal_cap, modulation_lambda, weights):
                 float(weight), target, rel_tol=0.0, abs_tol=1e-12
         ) for target in weights):
             continue
+        noise = float(row["requested_noise_ratio"])
+        if not any(math.isclose(
+                noise, target, rel_tol=0.0, abs_tol=1e-12
+        ) for target in noise_ratios):
+            continue
         identity = (
-            float(row["requested_noise_ratio"]),
+            noise,
             float(weight),
             int(row["seed"]),
         )
@@ -40,7 +48,7 @@ def analyze(report, dataset, removal_cap, modulation_lambda, weights):
         seen.add(identity)
         rows.append(row)
 
-    expected = 2 * len(weights)
+    expected = len(noise_ratios) * len(weights)
     if len(rows) != expected:
         raise ValueError(
             "Expected %d ranking rows, found %d" % (expected, len(rows))
@@ -48,16 +56,31 @@ def analyze(report, dataset, removal_cap, modulation_lambda, weights):
     rows.sort(key=lambda row: (
         float(row["requested_noise_ratio"]), float(row["structure_weight"])
     ))
+    schedules = {row.get("filtering_schedule") for row in rows}
+    filtering_epochs = {int(row["filtering_epoch"]) for row in rows}
+    fixed_time_controlled = schedules == {"fixed"} and len(filtering_epochs) == 1
+    if fixed_time_controlled:
+        weight_semantics = (
+            "risk=w_s*(1-structure_rank)+(1-w_s)*momentum_rank; removal "
+            "count and filtering epoch are matched across every ranking arm"
+        )
+    else:
+        weight_semantics = (
+            "risk=w_s*(1-structure_rank)+(1-w_s)*momentum_rank; the same "
+            "selected cap fixes removal count, while adaptive trigger time may "
+            "still differ because it monitors the ranked top-B set"
+        )
     return {
         "schema_version": "nrgcf_ranking_ablation_v2",
         "dataset": dataset,
         "selected_max_removal_ratio": float(removal_cap),
         "modulation_lambda": float(modulation_lambda),
-        "weight_semantics": (
-            "risk=w_s*(1-structure_rank)+(1-w_s)*momentum_rank; the same "
-            "selected cap fixes removal count, while adaptive trigger time may "
-            "still differ because it monitors the ranked top-B set"
+        "noise_ratios": noise_ratios,
+        "fixed_time_controlled": fixed_time_controlled,
+        "filtering_epoch": (
+            next(iter(filtering_epochs)) if fixed_time_controlled else None
         ),
+        "weight_semantics": weight_semantics,
         "runs": rows,
     }
 
@@ -74,6 +97,11 @@ def markdown(report):
         "Removed | Noisy removal | Precision |",
         "|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    if report.get("fixed_time_controlled"):
+        lines[3:3] = [
+            "All ranking arms filter at fixed epoch `%d`." % report["filtering_epoch"],
+            "",
+        ]
     for row in report["runs"]:
         noisy_rate = row.get("noisy_removal_rate")
         precision = row.get("removed_precision_noisy")
@@ -100,6 +128,7 @@ def main():
     parser.add_argument("--removal-cap", type=float, required=True)
     parser.add_argument("--modulation-lambda", type=float, required=True)
     parser.add_argument("--weights", required=True)
+    parser.add_argument("--noise-ratios", default="0 0.2")
     parser.add_argument("--output", required=True)
     parser.add_argument("--markdown", required=True)
     args = parser.parse_args()
@@ -110,6 +139,7 @@ def main():
             removal_cap=args.removal_cap,
             modulation_lambda=args.modulation_lambda,
             weights=args.weights.split(),
+            noise_ratios=args.noise_ratios.split(),
         )
     Path(args.output).write_text(
         json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",

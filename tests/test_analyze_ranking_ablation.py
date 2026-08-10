@@ -20,6 +20,7 @@ def row(ratio, weight):
         "requested_noise_ratio": ratio,
         "seed": 2026,
         "filtering_epoch": 7,
+        "filtering_schedule": "fixed",
         "best_recall_at_20": 0.2,
         "best_ndcg_at_20": 0.1,
         "removed_ratio": 0.02,
@@ -44,6 +45,21 @@ class RankingAblationAnalysisTest(unittest.TestCase):
         )
         self.assertEqual(len(result["runs"]), 4)
         self.assertEqual(result["selected_max_removal_ratio"], 0.02)
+        self.assertTrue(result["fixed_time_controlled"])
+        self.assertEqual(result["filtering_epoch"], 7)
+
+    def test_ignores_extra_noise_curve_rows(self):
+        report = {"runs": [
+            row(0.0, 0.5), row(0.2, 0.5), row(0.3, 0.5),
+        ]}
+        result = analyze_ranking_ablation.analyze(
+            report,
+            dataset="lastfm",
+            removal_cap=0.02,
+            modulation_lambda=0.4,
+            weights=[0.5],
+        )
+        self.assertEqual(len(result["runs"]), 2)
 
 
 if __name__ == "__main__":
