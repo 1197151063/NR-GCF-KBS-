@@ -98,6 +98,8 @@ Optional variables:
   RELIABILITY_MOMENTUM_Q  high-momentum quantile (default: 0.80)
   RELIABILITY_STRUCTURE_Q low-structure quantile (default: 0.20)
   RELIABILITY_STRUCTURE_WEIGHT soft structural rank weight (default: 0.95)
+  RELIABILITY_MAX_REMOVAL_RATIO maximum hard_structure_momentum removal ratio;
+                          1.0 preserves uncapped behavior (default: 1.0)
   RELIABILITY_MIN_WEIGHT  minimum soft propagation weight (default: 0.10)
   RELIABILITY_FILTER_EPOCH filtering epoch for hard_structure_momentum
                           (default: 15)
@@ -160,6 +162,7 @@ keep_generated_train="${KEEP_GENERATED_TRAIN:-1}"
 reliability_momentum_q="${RELIABILITY_MOMENTUM_Q:-0.80}"
 reliability_structure_q="${RELIABILITY_STRUCTURE_Q:-0.20}"
 reliability_structure_weight="${RELIABILITY_STRUCTURE_WEIGHT:-0.95}"
+reliability_max_removal_ratio="${RELIABILITY_MAX_REMOVAL_RATIO:-1.0}"
 reliability_min_weight="${RELIABILITY_MIN_WEIGHT:-0.10}"
 reliability_filter_epoch="${RELIABILITY_FILTER_EPOCH:-15}"
 reliability_filter_schedule="${RELIABILITY_FILTER_SCHEDULE:-fixed}"
@@ -219,7 +222,7 @@ if ! [[ "$reliability_adaptive_stable_checks" =~ ^[0-9]+$ ]] || \
   echo "RELIABILITY_ADAPTIVE_STABLE_CHECKS must be positive." >&2
   exit 2
 fi
-for value in "$reliability_adaptive_min_coverage" "$reliability_adaptive_jaccard"; do
+for value in "$reliability_adaptive_min_coverage" "$reliability_adaptive_jaccard" "$reliability_max_removal_ratio"; do
   if ! python3 - "$value" <<'PY'
 import math
 import sys
@@ -230,7 +233,7 @@ except ValueError:
 raise SystemExit(0 if math.isfinite(value) and 0.0 <= value <= 1.0 else 1)
 PY
   then
-    echo "Adaptive coverage and Jaccard values must be within [0,1]." >&2
+    echo "Adaptive coverage, Jaccard, and max removal ratio values must be within [0,1]." >&2
     exit 2
   fi
 done
@@ -640,6 +643,7 @@ echo "  representation lambda: $representation_modulation_lambda"
 echo "  reliability momentum quantile: $reliability_momentum_q"
 echo "  reliability structure quantile: $reliability_structure_q"
 echo "  reliability structure weight: $reliability_structure_weight"
+echo "  reliability max removal ratio: $reliability_max_removal_ratio"
 echo "  train lr: ${train_lr:-entry_default}"
 echo "  train init weight: ${train_init_weight:-entry_default}"
 echo "  summary only: $summary_only"
@@ -758,6 +762,7 @@ for ratio in $noise_ratios; do
         --edge-reliability-momentum-quantile "$reliability_momentum_q"
         --edge-reliability-structure-quantile "$reliability_structure_q"
         --edge-reliability-structure-weight "$reliability_structure_weight"
+        --edge-reliability-max-removal-ratio "$reliability_max_removal_ratio"
         --edge-reliability-min-weight "$reliability_min_weight"
         --edge-reliability-filtering-epoch "$reliability_filter_epoch"
         --edge-reliability-filtering-schedule "$reliability_filter_schedule"
@@ -816,6 +821,7 @@ for ratio in $noise_ratios; do
       echo "reliability_momentum_quantile=$reliability_momentum_q"
       echo "reliability_structure_quantile=$reliability_structure_q"
       echo "reliability_structure_weight=$reliability_structure_weight"
+      echo "reliability_max_removal_ratio=$reliability_max_removal_ratio"
       echo "representation_modulation_mode=$representation_modulation_mode"
       echo "representation_modulation_ramp_epochs=$representation_modulation_ramp_epochs"
       echo "representation_modulation_lambda=$representation_modulation_lambda"

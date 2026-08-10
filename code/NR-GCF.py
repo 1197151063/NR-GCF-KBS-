@@ -114,6 +114,10 @@ if (world.args.export_edge_diagnostics
     )
 if world.args.representation_modulation_ramp_epochs < 0:
     raise ValueError('--representation-modulation-ramp-epochs cannot be negative')
+if not 0.0 <= world.args.edge_reliability_max_removal_ratio <= 1.0:
+    raise ValueError(
+        '--edge-reliability-max-removal-ratio must be within [0, 1]'
+    )
 if world.args.edge_reliability_filtering_schedule == 'adaptive':
     if world.args.edge_filter_mode != 'hard_structure_momentum':
         raise ValueError(
@@ -285,6 +289,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             structure_quantile=world.args.edge_reliability_structure_quantile,
             structure_weight=world.args.edge_reliability_structure_weight,
             minimum_weight=world.args.edge_reliability_min_weight,
+            max_removal_ratio=(
+                world.args.edge_reliability_max_removal_ratio
+            ),
             momentum_semantics=(
                 'per_edge_ema_instance_bpr_loss_decay_'
                 + str(world.args.edge_reliability_momentum_decay)
@@ -349,6 +356,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                     structure_quantile=world.args.edge_reliability_structure_quantile,
                     structure_weight=world.args.edge_reliability_structure_weight,
                     minimum_weight=world.args.edge_reliability_min_weight,
+                    max_removal_ratio=(
+                        world.args.edge_reliability_max_removal_ratio
+                    ),
                 )
                 current_policy['mode'] = 'current'
                 current_policy['retained_mask'] = (
@@ -529,6 +539,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                         world.args.edge_reliability_structure_weight
                     ),
                     minimum_weight=world.args.edge_reliability_min_weight,
+                    max_removal_ratio=(
+                        world.args.edge_reliability_max_removal_ratio
+                    ),
                     momentum_semantics=momentum_semantics,
                     momentum_observed_mask=(
                         momentum_observed_mask_for_filter

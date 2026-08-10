@@ -134,6 +134,16 @@ def parse_args():
                         help='hard consensus low-structure percentile threshold')
     parser.add_argument('--edge-reliability-structure-weight', type=float, default=0.95,
                         help='diagnostic soft reliability weight assigned to structural percentile rank')
+    parser.add_argument(
+        '--edge-reliability-max-removal-ratio',
+        type=float,
+        default=1.0,
+        help=(
+            'upper bound on the hard_structure_momentum removal budget as a '
+            'fraction of the filtering graph; 1.0 preserves the uncapped '
+            'behavior'
+        ),
+    )
     parser.add_argument('--edge-reliability-min-weight', type=float, default=0.10,
                         help='minimum propagation weight in soft reliability mode')
     parser.add_argument('--edge-reliability-filtering-epoch', type=int, default=15,

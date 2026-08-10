@@ -24,7 +24,7 @@ except ImportError:  # Keep lightweight rank/statistic tests importable.
     torch = None
 
 
-SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v10"
+SCHEMA_VERSION = "nrgcf_edge_reliability_pilot_v11"
 
 
 def _require_torch():
@@ -405,6 +405,22 @@ def _top_risk_retained_mask(risk, target_remove_count):
     return retained
 
 
+def _cap_removal_budget(uncapped_count, edge_count, max_removal_ratio):
+    """Apply a deterministic floor-based cap to a hard removal budget."""
+    uncapped_count = int(uncapped_count)
+    edge_count = int(edge_count)
+    max_removal_ratio = float(max_removal_ratio)
+    if uncapped_count < 0 or edge_count < 0:
+        raise ValueError("Removal counts cannot be negative")
+    if uncapped_count > edge_count:
+        raise ValueError("Removal budget cannot exceed the edge count")
+    if (not math.isfinite(max_removal_ratio)
+            or not 0.0 <= max_removal_ratio <= 1.0):
+        raise ValueError("max_removal_ratio must be finite and within [0, 1]")
+    cap_count = int(math.floor(max_removal_ratio * edge_count))
+    return min(uncapped_count, cap_count), cap_count
+
+
 def node_confidence_from_edge_reliability(
         edge_index_cpu, reliability, retained_mask, num_users, num_items):
     """Aggregate frozen retained-edge confidence into deterministic nodes.
@@ -499,7 +515,7 @@ def compute_two_hop_structure_features(
 def build_reliability_policy(
         edge_index, raw_momentum, num_users, num_items, mode, topk,
         chunk_size, min_degree, momentum_quantile, structure_quantile,
-        structure_weight, minimum_weight,
+        structure_weight, minimum_weight, max_removal_ratio=1.0,
         momentum_semantics="legacy_runtime_momentum",
         momentum_observed_mask=None, structural_features=None):
     """Compute a frozen filtering policy without reading evaluation labels."""
@@ -513,7 +529,8 @@ def build_reliability_policy(
             ("momentum_quantile", momentum_quantile),
             ("structure_quantile", structure_quantile),
             ("structure_weight", structure_weight),
-            ("minimum_weight", minimum_weight)):
+            ("minimum_weight", minimum_weight),
+            ("max_removal_ratio", max_removal_ratio)):
         if not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
             raise ValueError("%s must be finite and within [0, 1]" % name)
     if int(chunk_size) <= 0 or int(topk) <= 0:
@@ -606,6 +623,11 @@ def build_reliability_policy(
     consensus_candidate = high_momentum & low_structure
     consensus_remove_count = int((consensus_candidate & ~protected).sum())
     adaptive_budget_count = int(consensus_candidate.sum())
+    capped_adaptive_budget_count, max_removal_count = _cap_removal_budget(
+        uncapped_count=adaptive_budget_count,
+        edge_count=edge_count,
+        max_removal_ratio=max_removal_ratio,
+    )
     fused_risk = 1.0 - reliability
 
     retained = np.ones(edge_count, dtype=bool)
@@ -628,7 +650,7 @@ def build_reliability_policy(
     elif mode == "hard_structure_momentum":
         retained = _top_risk_retained_mask(
             risk=fused_risk,
-            target_remove_count=adaptive_budget_count,
+            target_remove_count=capped_adaptive_budget_count,
         )
         propagation_weight = retained.astype(np.float32)
     elif mode == "soft_reliability":
@@ -689,8 +711,10 @@ def build_reliability_policy(
         decision.update({
             "rule": "remove highest structure-dominant fused risks",
             "fused_risk": "structure_weight*(1-structure_rank) + (1-structure_weight)*momentum_rank",
-            "budget": "count(high_momentum_quantile AND low_structure_quantile)",
-            "target_remove_count": adaptive_budget_count,
+            "budget": "min(count(high_momentum_quantile AND low_structure_quantile), floor(max_removal_ratio * edge_count))",
+            "uncapped_target_remove_count": adaptive_budget_count,
+            "max_removal_count": max_removal_count,
+            "target_remove_count": capped_adaptive_budget_count,
             "actual_remove_count": int((~retained).sum()),
             "connectivity_constraint": "none by design",
             "tie_break": "ascending stable edge_id",
@@ -722,6 +746,8 @@ def build_reliability_policy(
         "consensus_candidate": consensus_candidate,
         "consensus_remove_count_after_protection": consensus_remove_count,
         "adaptive_budget_count_without_connectivity_constraint": adaptive_budget_count,
+        "capped_adaptive_budget_count": capped_adaptive_budget_count,
+        "max_removal_count": max_removal_count,
         "user_degree": user_degree,
         "item_degree": item_degree,
         "momentum_threshold": momentum_threshold,
@@ -735,6 +761,7 @@ def build_reliability_policy(
             "momentum_quantile": float(momentum_quantile),
             "structure_quantile": float(structure_quantile),
             "structure_weight": float(structure_weight),
+            "max_removal_ratio": float(max_removal_ratio),
             "minimum_weight": float(minimum_weight),
         },
     }
@@ -782,6 +809,10 @@ def write_reliability_summary(
         "adaptive_budget_count_without_connectivity_constraint": int(
             policy["adaptive_budget_count_without_connectivity_constraint"]
         ),
+        "capped_adaptive_budget_count": int(
+            policy["capped_adaptive_budget_count"]
+        ),
+        "max_removal_count": int(policy["max_removal_count"]),
         "momentum_observation": {
             "observed_edge_count": int(policy["momentum_observed_count"]),
             "unobserved_edge_count": int(policy["momentum_unobserved_count"]),
@@ -803,7 +834,7 @@ def write_reliability_summary(
             "current": "Exact current-code min-max/beta filtering; compact reporting does not alter the decision.",
             "hard_consensus": "Remove only high-momentum AND low-structure edges unless removal would make either endpoint degree fall below min_degree.",
             "hard_structure_only": "Remove the same number as protected hard_consensus, selecting only the lowest-structure finite unprotected edges with edge_id tie-breaking.",
-            "hard_structure_momentum": "Use stable EMA loss to calibrate an adaptive consensus budget, then remove that many highest structure-dominant fused-risk edges without connectivity constraints.",
+            "hard_structure_momentum": "Use stable EMA loss to calibrate an adaptive consensus budget, cap it by max_removal_ratio, then remove that many highest structure-dominant fused-risk edges without connectivity constraints.",
             "soft_reliability": "Keep all BPR positives; use frozen reliability only as LightGCN propagation edge weights. Unscorable/degree-protected edges have weight 1.",
             "gated_soft_reliability": "Keep all BPR positives and unit propagation weights outside the high-momentum/low-structure tail; smoothly attenuate only that tail.",
             "bpr_objective": "Original unweighted NR-GCF BPR plus L2; no reliability-weighted loss.",

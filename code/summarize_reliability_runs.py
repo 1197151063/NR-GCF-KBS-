@@ -62,11 +62,15 @@ def summarize(root):
             "momentum_quantile": parameters.get("momentum_quantile"),
             "structure_quantile": parameters.get("structure_quantile"),
             "structure_weight": parameters.get("structure_weight"),
+            "max_removal_ratio": parameters.get("max_removal_ratio"),
             "representation_modulation_mode": representation_modulation.get("mode"),
             "representation_modulation_ramp_epochs": representation_modulation.get("ramp_epochs"),
             "representation_modulation_lambda": representation_modulation.get("lambda"),
             "adaptive_budget_count": reliability.get(
                 "adaptive_budget_count_without_connectivity_constraint"
+            ),
+            "capped_adaptive_budget_count": reliability.get(
+                "capped_adaptive_budget_count"
             ),
             "actual_noise_ratio": (
                 (reliability.get("noise_validation") or {}).get("actual_noise_ratio")
@@ -112,7 +116,7 @@ def summarize(root):
             "gated_soft_risk_auprc": _metric(evaluation, "gated_soft_risk", "average_precision"),
         })
     return {
-        "schema_version": "nrgcf_reliability_comparison_v8",
+        "schema_version": "nrgcf_reliability_comparison_v9",
         "root": str(root),
         "run_count": len(runs),
         "runs": runs,

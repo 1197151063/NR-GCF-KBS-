@@ -132,6 +132,20 @@ class EdgeReliabilityMathTest(unittest.TestCase):
             retained, np.array([False, False, True, True, False])
         )
 
+    def test_removal_budget_cap_uses_floor_and_preserves_uncapped_behavior(self):
+        self.assertEqual(
+            edge_reliability._cap_removal_budget(70, 1000, 0.03),
+            (30, 30),
+        )
+        self.assertEqual(
+            edge_reliability._cap_removal_budget(70, 1000, 1.0),
+            (70, 1000),
+        )
+        self.assertEqual(
+            edge_reliability._cap_removal_budget(1, 3, 0.20),
+            (0, 0),
+        )
+
 
 @unittest.skipUnless(
     edge_reliability is not None and edge_reliability.torch is not None,
