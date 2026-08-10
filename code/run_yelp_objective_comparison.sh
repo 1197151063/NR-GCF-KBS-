@@ -67,7 +67,7 @@ run_combo() {
   TRAIN_EPOCHS="$train_epochs" \
   TRAIN_PATIENCE="$train_patience" \
   TRAIN_LR="${TRAIN_LR:-0.0005}" \
-  TRAIN_INIT_WEIGHT="${TRAIN_INIT_WEIGHT:-0.01}" \
+  TRAIN_INIT_WEIGHT="${TRAIN_INIT_WEIGHT:-1.0}" \
   TRAINING_OBJECTIVE="$objective" \
   SSM_NUM_NEG="${SSM_NUM_NEG:-1024}" \
   SSM_TAU="${SSM_TAU:-0.1}" \

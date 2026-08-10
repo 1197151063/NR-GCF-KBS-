@@ -13,8 +13,15 @@ from utils import init_logger, print_log, write_final_log
 
 
 config = {
-    'init':'normal',#NORMAL DISTRIBUTION
-    'init_weight':world.init_weight,#INIT WEIGHT
+    # Preserve the released normal initialization for BPR experiments. SSM
+    # and AU use standard Xavier Uniform because their normalized objectives
+    # should not inherit the BPR-specific small-normal initialization.
+    'init': (
+        'normal' if world.training_objective == 'bpr' else 'uniform'
+    ),
+    'init_weight': (
+        world.init_weight if world.training_objective == 'bpr' else 1.0
+    ),
     'dim':64,#EMBEDDING_SIZE
     'decay':world.decay,#L2_NORM
     'K':3,

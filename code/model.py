@@ -300,11 +300,19 @@ class NRGCF(RecModel):
 
     def objective_metadata(self):
         name = str(self.config.get('training_objective', 'bpr'))
+        initialization = {
+            'name': (
+                'normal' if self.config['init'] == 'normal'
+                else 'xavier_uniform'
+            ),
+            'scale_or_gain': float(self.config['init_weight']),
+        }
         if name == 'bpr':
             return {
                 'name': 'bpr',
                 'description': 'Mean pairwise BPR softplus plus ego-embedding L2.',
                 'regularization': 'ego_embedding_l2',
+                'embedding_initialization': initialization,
             }
         if name == 'ssm':
             return {
@@ -318,6 +326,7 @@ class NRGCF(RecModel):
                 'positive_in_denominator': False,
                 'negative_sampling': 'uniform_item_ids_with_replacement',
                 'regularization': 'sampled_propagated_embedding_l2',
+                'embedding_initialization': initialization,
             }
         if name == 'au':
             return {
@@ -332,6 +341,7 @@ class NRGCF(RecModel):
                 'uniformity_t': float(self.config['au_uniformity_t']),
                 'uniformity_sides': 'user_plus_item',
                 'regularization': 'none',
+                'embedding_initialization': initialization,
             }
         raise ValueError('Unsupported training objective: ' + name)
 
