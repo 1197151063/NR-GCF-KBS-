@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reproduce the Adap_tau LightGCN training protocol inside NR-GCF, then make
-# one matched CrossNorm comparison per objective.  Yelp has no validation file
-# in either repository, so the existing NR-GCF direct-test Recall@20 selection
-# matches the reference's effective protocol.
+# Reproduce the Adap_tau LightGCN training protocol inside NR-GCF. CrossNorm is
+# evaluated only with fixed-temperature SSM; Adap-tau remains an independent
+# comparison method and is never combined with CrossNorm. Yelp has no
+# validation file in either repository, so the existing NR-GCF direct-test
+# Recall@20 selection matches the reference's effective protocol.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dataset=yelp2018
 objectives="${OBJECTIVES:-ssm adap_tau}"
-modulation_modes="${MODULATION_MODES:-none original_always}"
 # The reference entry point fixes all random seeds to 2020.
 seed="${SEED:-2020}"
 gpu_id="${GPU_ID:-0}"
@@ -21,10 +21,6 @@ skip_completed="${SKIP_COMPLETED:-1}"
 
 if [[ "$objectives" != "ssm adap_tau" ]]; then
   echo "This reproduction requires OBJECTIVES='ssm adap_tau'." >&2
-  exit 2
-fi
-if [[ "$modulation_modes" != "none original_always" ]]; then
-  echo "This reproduction requires MODULATION_MODES='none original_always'." >&2
   exit 2
 fi
 for flag in dry_run skip_completed; do
@@ -97,7 +93,7 @@ run_combo() {
 
 echo "Yelp2018 Adap_tau-reference objective reproduction"
 echo "  objectives:        $objectives"
-echo "  propagation modes: $modulation_modes"
+echo "  planned methods:   SSM+LightGCN, SSM+CrossNorm, Adap-tau+LightGCN"
 echo "  negatives:         B-1 in-batch (n_negs ignored)"
 echo "  batch/lr/L2:       ${TRAIN_BATCH_SIZE:-2048}/${TRAIN_LR:-0.001}/${TRAIN_DECAY:-0.1}"
 echo "  message dropout:   ${OBJECTIVE_MESSAGE_DROPOUT:-0.1}"
@@ -105,13 +101,11 @@ echo "  SSM tau:           ${SSM_TAU:-0.1}"
 echo "  Adap-tau mode/t2:  ${ADAP_TAU_MODE:-weight_mean}/${ADAP_TAU_TEMPERATURE_2:-1.5}"
 echo "  selection:         direct test Recall@20, patience $train_patience"
 echo "  output:            $output_root"
-echo "  planned runs:      4"
+echo "  planned runs:      3"
 
-for objective in $objectives; do
-  for modulation_mode in $modulation_modes; do
-    run_combo "$objective" "$modulation_mode"
-  done
-done
+run_combo ssm none
+run_combo ssm original_always
+run_combo adap_tau none
 
 if [[ "$dry_run" == "1" ]]; then
   echo "Dry run completed."
@@ -123,7 +117,7 @@ python3 "$script_dir/summarize_reliability_runs.py" \
 python3 "$script_dir/analyze_objective_backbones.py" \
   --input "$output_root/all_runs.json" \
   --dataset "$dataset" \
-  --objectives "$objectives" \
+  --objectives ssm \
   --baseline-mode none \
   --treatment-mode original_always \
   --noise-ratio 0 \
