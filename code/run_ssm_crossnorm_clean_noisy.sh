@@ -16,7 +16,7 @@ fi
 echo "SSM + always-on CrossNorm clean/noisy confirmation"
 echo "  noise mode/ratios: degree-preserving replacement / 0 0.2"
 echo "  init:              Xavier Uniform, gain 1"
-echo "  decay/lr/tau:      1e-5 / 5e-4 / 0.09"
+echo "  decay/lr/tau:      1e-4 / 5e-4 / 0.09"
 echo "  message dropout:   0.1"
 echo "  epochs/patience:   100 / 20"
 echo "  seed/GPU:          2020 / $gpu_id"
@@ -35,7 +35,7 @@ TRAIN_BATCH_SIZE=2048 \
 TRAIN_LR=0.0005 \
 TRAIN_INIT_METHOD=xavier_uniform \
 TRAIN_INIT_WEIGHT=1.0 \
-TRAIN_DECAY=0.00001 \
+TRAIN_DECAY=0.0001 \
 TRAINING_OBJECTIVE=ssm \
 SSM_TAU=0.09 \
 OBJECTIVE_MESSAGE_DROPOUT=0.1 \

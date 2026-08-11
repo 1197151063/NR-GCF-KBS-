@@ -34,7 +34,7 @@ def analyze(report, noise_ratios, seed):
         "seed": int(seed),
         "configuration": {
             "embedding_init": "xavier_uniform",
-            "decay": 1e-5,
+            "decay": 1e-4,
             "learning_rate": 5e-4,
             "temperature": 0.09,
             "message_dropout": 0.1,
@@ -49,7 +49,7 @@ def markdown(report):
     lines = [
         "# SSM + CrossNorm clean/noisy confirmation",
         "",
-        "Xavier Uniform, decay `1e-5`, learning rate `5e-4`, tau `0.09`, "
+        "Xavier Uniform, decay `1e-4`, learning rate `5e-4`, tau `0.09`, "
         "message dropout `0.1`, seed `2020`.",
         "",
         "| Requested noise | Actual noise | Best epoch | Recall@20 | NDCG@20 | "
