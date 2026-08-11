@@ -55,6 +55,8 @@ tau = args.tau
 
 init_weight = args.init_weight
 
+embedding_init = args.embedding_init
+
 lambda_ = args.lambda_
 lr = args.lr
 flag = 0

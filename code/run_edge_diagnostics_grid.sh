@@ -75,6 +75,7 @@ Optional variables:
                           post-filter smoke epochs (default: entry default)
   TRAIN_PATIENCE          optional early-stopping patience override
   TRAIN_LR                optional learning-rate override
+  TRAIN_INIT_METHOD       auto, normal, or xavier_uniform (default: auto)
   TRAIN_INIT_WEIGHT       optional embedding initialization std override
   TRAIN_BATCH_SIZE        optional interaction batch size override
   TRAIN_DECAY             optional L2 coefficient override
@@ -168,6 +169,7 @@ run_pilot_analysis="${RUN_PILOT_ANALYSIS:-1}"
 train_epochs="${TRAIN_EPOCHS:-}"
 train_patience="${TRAIN_PATIENCE:-}"
 train_lr="${TRAIN_LR:-}"
+train_init_method="${TRAIN_INIT_METHOD:-auto}"
 train_init_weight="${TRAIN_INIT_WEIGHT:-}"
 train_batch_size="${TRAIN_BATCH_SIZE:-}"
 train_decay="${TRAIN_DECAY:-}"
@@ -229,6 +231,12 @@ if [[ "$training_objective" != "bpr" && \
 fi
 if [[ "$training_objective" != "bpr" && "$edge_filter_mode" != "none" ]]; then
   echo "SSM/AU/Adap-tau objective pilots require EDGE_FILTER_MODE=none." >&2
+  exit 2
+fi
+if [[ "$train_init_method" != "auto" && \
+      "$train_init_method" != "normal" && \
+      "$train_init_method" != "xavier_uniform" ]]; then
+  echo "TRAIN_INIT_METHOD must be auto, normal, or xavier_uniform." >&2
   exit 2
 fi
 if [[ -n "$train_batch_size" ]] && \
@@ -378,8 +386,13 @@ if [[ "$replacement_selection" != "uniform" && \
   exit 2
 fi
 if [[ -n "$train_epochs" ]] && \
-   { ! [[ "$train_epochs" =~ ^[0-9]+$ ]] || [[ "$train_epochs" -lt 15 ]]; }; then
-  echo "TRAIN_EPOCHS must be an integer >= 15 when provided." >&2
+   { ! [[ "$train_epochs" =~ ^[0-9]+$ ]] || [[ "$train_epochs" -lt 1 ]]; }; then
+  echo "TRAIN_EPOCHS must be a positive integer when provided." >&2
+  exit 2
+fi
+if [[ "$edge_filter_mode" != "none" && -n "$train_epochs" && \
+      "$train_epochs" -lt 15 ]]; then
+  echo "TRAIN_EPOCHS must be >= 15 when edge filtering is enabled." >&2
   exit 2
 fi
 if [[ -n "$train_patience" ]] && \
@@ -742,6 +755,7 @@ echo "  reliability structure quantile: $reliability_structure_q"
 echo "  reliability structure weight: $reliability_structure_weight"
 echo "  reliability max removal ratio: $reliability_max_removal_ratio"
 echo "  train lr: ${train_lr:-entry_default}"
+echo "  train init method: $train_init_method"
 echo "  train init weight: ${train_init_weight:-entry_default}"
 echo "  train batch size: ${train_batch_size:-entry_default}"
 echo "  train decay: ${train_decay:-entry_default}"
@@ -847,6 +861,7 @@ for ratio in $noise_ratios; do
       --seed "$seed"
       --requested-noise-ratio "$ratio"
       --training-objective "$training_objective"
+      --embedding-init "$train_init_method"
       --num_neg "$ssm_num_neg"
       --tau "$ssm_tau"
       --objective-message-dropout "$objective_message_dropout"
@@ -958,6 +973,7 @@ for ratio in $noise_ratios; do
       echo "train_epochs=${train_epochs:-entry_default}"
       echo "train_patience=${train_patience:-entry_default}"
       echo "train_lr=${train_lr:-entry_default}"
+      echo "train_init_method=$train_init_method"
       echo "train_init_weight=${train_init_weight:-entry_default}"
       echo "train_batch_size=${train_batch_size:-entry_default}"
       echo "train_decay=${train_decay:-entry_default}"

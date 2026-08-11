@@ -17,11 +17,11 @@ config = {
     # and AU use standard Xavier Uniform because their normalized objectives
     # should not inherit the BPR-specific small-normal initialization.
     'init': (
-        'normal' if world.training_objective == 'bpr' else 'uniform'
+        ('normal' if world.training_objective == 'bpr' else 'uniform')
+        if world.embedding_init == 'auto'
+        else ('normal' if world.embedding_init == 'normal' else 'uniform')
     ),
-    'init_weight': (
-        world.init_weight if world.training_objective == 'bpr' else 1.0
-    ),
+    'init_weight': world.init_weight,
     'dim':64,#EMBEDDING_SIZE
     'decay':world.decay,#L2_NORM
     'K':3,
@@ -294,16 +294,22 @@ uses_adaptive_filtering = (
     uses_stable_momentum
     and world.args.edge_reliability_filtering_schedule == 'adaptive'
 )
+filtering_disabled = world.args.edge_filter_mode == 'none'
 configured_filtering_epoch = (
-    int(world.args.edge_reliability_adaptive_max_epoch)
-    if uses_adaptive_filtering
-    else (
-        int(world.args.edge_reliability_filtering_epoch)
-        if uses_stable_momentum else 15
+    None
+    if filtering_disabled else (
+        int(world.args.edge_reliability_adaptive_max_epoch)
+        if uses_adaptive_filtering
+        else (
+            int(world.args.edge_reliability_filtering_epoch)
+            if uses_stable_momentum else 15
+        )
     )
 )
 active_filtering_epoch = configured_filtering_epoch
-if active_filtering_epoch < 2 or active_filtering_epoch > world.TRAIN_epochs:
+if (not filtering_disabled
+        and (active_filtering_epoch < 2
+             or active_filtering_epoch > world.TRAIN_epochs)):
     raise ValueError(
         'Filtering epoch must be between 2 and the configured training epochs.'
     )
@@ -362,7 +368,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                      and not uses_stable_momentum
                  ))
     filter_now = (
-        not filtering_applied and epoch == active_filtering_epoch
+        not filtering_disabled
+        and not filtering_applied
+        and epoch == active_filtering_epoch
     )
     policy_for_filter = None
     raw_momentum_for_filter = None
@@ -896,7 +904,9 @@ if (world.args.edge_filter_mode != 'current'
             if uses_stable_momentum else 'fixed'
         ),
         configured_filtering_epoch=configured_filtering_epoch,
-        actual_filtering_epoch=active_filtering_epoch,
+        actual_filtering_epoch=(
+            active_filtering_epoch if filtering_applied else None
+        ),
         adaptive_filtering_trace=(
             adaptive_filtering_controller.trace
             if adaptive_filtering_controller is not None else None

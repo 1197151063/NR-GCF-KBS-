@@ -44,6 +44,15 @@ def parse_args():
 
     parser.add_argument('--init_weight', type=float, default=1.0)
 
+    parser.add_argument(
+        '--embedding-init', type=str, default='auto',
+        choices=['auto', 'normal', 'xavier_uniform'],
+        help=(
+            'embedding initializer; auto preserves normal for BPR and '
+            'Xavier Uniform for normalized objectives'
+        ),
+    )
+
     parser.add_argument('--decay', type=float, default=1e-4)
 
     parser.add_argument('--tau', type=float, default=0.1,

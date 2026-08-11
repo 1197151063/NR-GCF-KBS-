@@ -976,8 +976,14 @@ def write_training_summary(
         },
         "filtering_timing": {
             "schedule": str(filtering_schedule),
-            "configured_filtering_epoch": int(configured_filtering_epoch),
-            "actual_filtering_epoch": int(actual_filtering_epoch),
+            "configured_filtering_epoch": (
+                int(configured_filtering_epoch)
+                if configured_filtering_epoch is not None else None
+            ),
+            "actual_filtering_epoch": (
+                int(actual_filtering_epoch)
+                if actual_filtering_epoch is not None else None
+            ),
             "uses_evaluation_metric": False,
             "adaptive_trace": adaptive_filtering_trace,
         },
