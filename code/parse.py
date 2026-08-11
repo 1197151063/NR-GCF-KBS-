@@ -4,8 +4,8 @@ import argparse
 def parse_args():
     parser = argparse.ArgumentParser(description="Go RecModel")
     
-    parser.add_argument('--bpr_batch', type=int, default=1024,
-                        help="the batch size for bpr loss training procedure")  # 512 1024 2048 4096
+    parser.add_argument('--bpr_batch', type=int, default=2048,
+                        help="training interaction batch size (default: 2048)")
 
     parser.add_argument('--epochs', type=int, default=1000) 
 
@@ -36,7 +36,10 @@ def parse_args():
 
     parser.add_argument(
         '--num_neg', type=int, default=1024,
-        help='number of uniformly sampled items per positive for SSM (default: 1024)',
+        help=(
+            'legacy sampled-negative count; the Adap_tau-reference LightGCN '
+            'SSM/Adap-tau objectives use B-1 in-batch negatives and ignore it'
+        ),
     )
 
     parser.add_argument('--init_weight', type=float, default=1.0)
@@ -47,11 +50,47 @@ def parse_args():
                         help="the temperature for softmax in loss function")  # 0.1
     parser.add_argument(
         '--training-objective', type=str, default='bpr',
-        choices=['bpr', 'ssm', 'au'],
+        choices=['bpr', 'ssm', 'au', 'adap_tau'],
         help=(
-            'optimization objective: original BPR+L2, sampled-softmax SSM, '
-            'or alignment-uniformity (default: bpr)'
+            'optimization objective: original BPR+L2, Adap_tau-reference '
+            'in-batch SSM, alignment-uniformity, or adaptive-temperature '
+            'in-batch SSM (default: bpr)'
         ),
+    )
+    parser.add_argument(
+        '--objective-message-dropout', type=float, default=0.0,
+        help=(
+            'message dropout applied after each propagation for normalized '
+            'objectives; Adap_tau Yelp LightGCN uses 0.1'
+        ),
+    )
+    parser.add_argument(
+        '--adap-tau-mode', default='weight_mean',
+        choices=['weight_v0', 'weight_mean', 'weight_ratio'],
+        help='Adap_tau inverse-temperature mapping (Yelp default: weight_mean)',
+    )
+    parser.add_argument(
+        '--adap-tau-temperature-2', type=float, default=1.5,
+        help='scale for centered prior-epoch user losses (Yelp default: 1.5)',
+    )
+    parser.add_argument(
+        '--adap-tau-loss-quantile', type=float, default=1.0,
+        help='loss quantile used only by weight_ratio',
+    )
+    parser.add_argument(
+        '--adap-tau-recalibration-epoch', type=int, default=100,
+        help=(
+            'zero-based source epoch at which w_0 changes from the reference '
+            'initial estimate to embedding calibration (Yelp default: 100)'
+        ),
+    )
+    parser.add_argument(
+        '--adap-tau-degree-quantile', type=float, default=0.2,
+        help='strict user-degree quantile used for w_0 calibration',
+    )
+    parser.add_argument(
+        '--adap-tau-initial-positive-gap', type=float, default=0.7,
+        help='reference assumed cosine gap before w_0 recalibration',
     )
     parser.add_argument(
         '--au-uniformity-weight', type=float, default=1.0,

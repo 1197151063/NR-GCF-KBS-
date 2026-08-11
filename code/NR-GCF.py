@@ -31,6 +31,13 @@ config = {
     'training_objective': world.training_objective,
     'num_neg': world.num_neg,
     'tau': world.tau,
+    'objective_message_dropout': world.objective_message_dropout,
+    'adap_tau_mode': world.adap_tau_mode,
+    'adap_tau_temperature_2': world.adap_tau_temperature_2,
+    'adap_tau_loss_quantile': world.adap_tau_loss_quantile,
+    'adap_tau_recalibration_epoch': world.adap_tau_recalibration_epoch,
+    'adap_tau_degree_quantile': world.adap_tau_degree_quantile,
+    'adap_tau_initial_positive_gap': world.adap_tau_initial_positive_gap,
     'au_uniformity_weight': world.au_uniformity_weight,
     'au_uniformity_t': world.au_uniformity_t,
 }
@@ -42,27 +49,46 @@ config['representation_modulation_ramp_epochs'] = (
     world.args.representation_modulation_ramp_epochs
 )
 
-def Fast_Sampling(dataset:Loader):
+def Fast_Sampling(dataset:Loader, sample_bpr_negative=True):
     """
     With Uniformal Sampling on Graph
     """
     train_edge_index = dataset.train_edge_index.to(device)
     num_items = dataset.num_items
-    batch_size = 2048
+    batch_size = int(world.config['bpr_batch_size'])
     mini_batch = []
     indexes = []
-    train_loader = DataLoader(
-            range(train_edge_index.size(1)),
-            shuffle=True,
-            batch_size=batch_size)
+    if sample_bpr_negative:
+        # Preserve the released NR-GCF/BPR sampler and its torch RNG stream.
+        train_loader = DataLoader(
+                range(train_edge_index.size(1)),
+                shuffle=True,
+                batch_size=batch_size)
+    else:
+        # Adap_tau shuffles the complete interaction array with NumPy before
+        # slicing consecutive batches. Keep this path separate so normalized
+        # objectives do not perturb the original BPR path.
+        order = np.arange(train_edge_index.size(1), dtype=np.int64)
+        np.random.shuffle(order)
+        train_loader = (
+            torch.from_numpy(order[start:start + batch_size]).long()
+            for start in range(0, order.size, batch_size)
+        )
     for index in train_loader:
         pos_edge_label_index = train_edge_index[:,index]
-        neg_edge_label_index = torch.randint(0, num_items,(index.numel(), ), device=device)
-        edge_label_index = torch.stack([
-            pos_edge_label_index[0],
-            pos_edge_label_index[1],
-            neg_edge_label_index,
-        ])
+        if sample_bpr_negative:
+            neg_edge_label_index = torch.randint(
+                0, num_items, (index.numel(),), device=device
+            )
+            edge_label_index = torch.stack([
+                pos_edge_label_index[0],
+                pos_edge_label_index[1],
+                neg_edge_label_index,
+            ])
+        else:
+            # Adap_tau LightGCN uses no_sample: the other positive items in
+            # this batch become the B-1 negatives inside the objective.
+            edge_label_index = pos_edge_label_index
         mini_batch.append(edge_label_index)
         indexes.append(index)
     return mini_batch,indexes
@@ -77,17 +103,45 @@ def train(dataset:Loader,
           update_legacy_momentum=True):
     model = model
     model.train()
-    edge_index,indexes = Fast_Sampling(dataset=dataset)
+    needs_legacy_loss = update_legacy_momentum and epoch < 15
+    needs_stable_loss = (
+        stable_edge_momentum is not None
+        and epoch <= int(stable_filtering_epoch)
+    )
+    sample_bpr_negative = (
+        model.config.get('training_objective') == 'bpr'
+        or needs_legacy_loss
+        or needs_stable_loss
+    )
+    model.prepare_objective_epoch(dataset.train_edge_index.to(device), epoch)
+    edge_index,indexes = Fast_Sampling(
+        dataset=dataset, sample_bpr_negative=sample_bpr_negative
+    )
     aver_loss = 0.
     total_batch = len(edge_index)
+    adap_tau_loss_sum = None
+    adap_tau_observation_count = None
+    if model.config.get('training_objective') == 'adap_tau':
+        adap_tau_loss_sum = torch.zeros(
+            model.num_users, dtype=torch.float32, device=device
+        )
+        adap_tau_observation_count = torch.zeros_like(adap_tau_loss_sum)
     for edge_label_index,index in zip(edge_index,indexes):
         opt.zero_grad()
-        loss = model.get_loss(edge_label_index)
-        needs_legacy_loss = update_legacy_momentum and epoch < 15
-        needs_stable_loss = (
-            stable_edge_momentum is not None
-            and epoch <= int(stable_filtering_epoch)
-        )
+        if adap_tau_loss_sum is not None:
+            loss, objective_aux = model.get_loss(
+                edge_label_index, return_aux=True
+            )
+            users = edge_label_index[0]
+            unit_loss = objective_aux['unit_temperature_loss'].to(
+                dtype=adap_tau_loss_sum.dtype
+            )
+            adap_tau_loss_sum.index_add_(0, users, unit_loss)
+            adap_tau_observation_count.index_add_(
+                0, users, torch.ones_like(unit_loss)
+            )
+        else:
+            loss = model.get_loss(edge_label_index)
         if needs_legacy_loss or needs_stable_loss:
             instance_loss = model.get_instance_loss(edge_label_index)
             if needs_legacy_loss:
@@ -99,6 +153,10 @@ def train(dataset:Loader,
         loss.backward()
         opt.step()   
         aver_loss += (loss)
+    if adap_tau_loss_sum is not None:
+        model.finish_objective_epoch(
+            adap_tau_loss_sum, adap_tau_observation_count
+        )
     aver_loss /= total_batch
     return aver_loss
 
@@ -111,17 +169,39 @@ def seed_runtime(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        if world.training_objective in ('ssm', 'adap_tau'):
+            # Match the Adap_tau entry point without changing BPR execution.
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
 
 seed_runtime(world.seed)
 device = world.device
 if world.patience < 1:
     raise ValueError('--patience must be a positive integer')
+if world.decay < 0:
+    raise ValueError('--decay must be non-negative')
+if world.config['bpr_batch_size'] < 1:
+    raise ValueError('--bpr_batch must be positive')
+if (world.training_objective in ('ssm', 'adap_tau')
+        and world.config['bpr_batch_size'] < 2):
+    raise ValueError('in-batch SSM/Adap-tau requires --bpr_batch >= 2')
 if world.training_objective == 'ssm':
-    if world.num_neg < 1:
-        raise ValueError('--num_neg must be positive for SSM')
     if world.tau <= 0:
         raise ValueError('--tau must be positive for SSM')
+if not 0.0 <= world.objective_message_dropout < 1.0:
+    raise ValueError('--objective-message-dropout must be within [0, 1)')
+if world.training_objective == 'adap_tau':
+    if world.adap_tau_temperature_2 <= 0:
+        raise ValueError('--adap-tau-temperature-2 must be positive')
+    if not 0.0 <= world.adap_tau_loss_quantile <= 1.0:
+        raise ValueError('--adap-tau-loss-quantile must be within [0, 1]')
+    if world.adap_tau_recalibration_epoch < 0:
+        raise ValueError('--adap-tau-recalibration-epoch cannot be negative')
+    if not 0.0 <= world.adap_tau_degree_quantile <= 1.0:
+        raise ValueError('--adap-tau-degree-quantile must be within [0, 1]')
+    if world.adap_tau_initial_positive_gap <= 0:
+        raise ValueError('--adap-tau-initial-positive-gap must be positive')
 if world.training_objective == 'au':
     if world.au_uniformity_weight < 0:
         raise ValueError('--au-uniformity-weight must be non-negative')
@@ -130,7 +210,7 @@ if world.training_objective == 'au':
 if (world.training_objective != 'bpr'
         and world.args.edge_filter_mode != 'none'):
     raise ValueError(
-        'SSM/AU objective pilots require --edge-filter-mode none so the '
+        'SSM/AU/Adap-tau objective pilots require --edge-filter-mode none so the '
         'ranking objective and graph filtering are not changed together. '
         'Their integration with edge reliability must be evaluated separately.'
     )
@@ -263,6 +343,7 @@ best_post_filter_epoch = None
 best_post_filter_recall = None
 best_post_filter_ndcg = None
 representation_modulation_trace = []
+objective_training_trace = []
 stopped_early = False
 filtering_applied = False
 # print(model.generate_weight(train_edge_index))
@@ -276,7 +357,10 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                  edge_loss_history=edge_loss_history,
                  stable_edge_momentum=stable_edge_momentum,
                  stable_filtering_epoch=active_filtering_epoch,
-                 update_legacy_momentum=not uses_stable_momentum)
+                 update_legacy_momentum=(
+                     world.training_objective == 'bpr'
+                     and not uses_stable_momentum
+                 ))
     filter_now = (
         not filtering_applied and epoch == active_filtering_epoch
     )
@@ -738,6 +822,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
     modulation_snapshot = model.modulation_snapshot()
     modulation_snapshot['epoch'] = int(epoch)
     representation_modulation_trace.append(modulation_snapshot)
+    objective_snapshot = model.objective_epoch_snapshot()
+    if objective_snapshot is not None:
+        objective_training_trace.append(objective_snapshot)
     # Filtering and any reliability-weighted modulation are installed before
     # this epoch's evaluation.  Include the trigger epoch itself and use the
     # same Recall@20 monitor as global early stopping.
@@ -754,9 +841,19 @@ for epoch in range(1, world.TRAIN_epochs + 1):
         best_epoch = epoch
         best_recall = recall[20]
         best_ndcg = ndcg[20]
+    objective_suffix = ''
+    if objective_snapshot is not None:
+        objective_suffix = (
+            ', inv_tau:[{low:.4f},{mean:.4f},{high:.4f}], w0:{w0:.4f}'
+        ).format(
+            low=objective_snapshot['user_inverse_temperature_min'],
+            mean=objective_snapshot['user_inverse_temperature_mean'],
+            high=objective_snapshot['user_inverse_temperature_max'],
+            w0=objective_snapshot['positive_inverse_temperature'],
+        )
     print_log(f'Epoch: {epoch:03d}, aver_loss : {loss:.5f}, R@20: '
-            f'{recall[20]:.4f}, N@20: {ndcg[20]:.4f}, '
-            f'time:{end_time-start_time:.2f} seconds')
+            f'{recall[20]:.4f}, N@20: {ndcg[20]:.4f}'
+            f'{objective_suffix}, time:{end_time-start_time:.2f} seconds')
     if flag == 1:
         stopped_early = True
         print_log(
@@ -805,6 +902,7 @@ if (world.args.edge_filter_mode != 'current'
             if adaptive_filtering_controller is not None else None
         ),
         training_objective=model.objective_metadata(),
+        objective_training_trace=objective_training_trace,
     )
 write_final_log(best_epoch=best_epoch, recall=best_recall, ndcg=best_ndcg, config=config)
 print_log(f"Log saved to: {log_path}")

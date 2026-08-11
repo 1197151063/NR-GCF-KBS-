@@ -4,9 +4,16 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.typing import SparseTensor
 from torch_sparse import SparseTensor,matmul
 from torch_geometric.nn.conv.gcn_conv import gcn_norm
+import math
 import torch.nn.functional as F
 import torch
 import world
+from adap_tau_objectives import (
+    adap_tau_in_batch_instance_loss,
+    adap_tau_inverse_temperature,
+    initial_adap_tau_inverse_temperature,
+    ssm_in_batch_instance_loss,
+)
 from utils import dropout_node_bipartite
 from torch_geometric.utils import dropout_edge,dropout_path,bipartite_subgraph
 device = world.device
@@ -119,39 +126,6 @@ class RecModel(MessagePassing):
         regularization =  (1/2) * embedding.norm(p=2).pow(2)/ edge_label_index.size(1)
         return self.config['decay'] * regularization
 
-    def ssm_loss(self,edge_label_index:LongTensor):
-        user_all,item_all = self.forward(edge_index=self.edge_index)
-        batch_size = edge_label_index[1].numel()
-        neg_edge_index = torch.randint(
-            0, self.num_items,
-            (batch_size, int(self.config['num_neg'])),
-            device=user_all.device,
-        )
-        user_emb = user_all[edge_label_index[0]]
-        pos_item_emb = item_all[edge_label_index[1]]
-        neg_item_emb = item_all[neg_edge_index]
-        # This is algebraically identical to the supplied concatenation-based
-        # L2 term, without materializing a second copy of all sampled vectors.
-        regularization = self.config['decay'] * 0.5 * (
-            user_emb.pow(2).sum()
-            + pos_item_emb.pow(2).sum()
-            + neg_item_emb.pow(2).sum()
-        ) / batch_size
-        user_normalized = F.normalize(user_emb, dim=-1)
-        pos_normalized = F.normalize(pos_item_emb, dim=-1)
-        neg_normalized = F.normalize(neg_item_emb, dim=-1)
-        pos_similarity = (user_normalized * pos_normalized).sum(dim=-1)
-        neg_similarity = torch.bmm(
-            neg_normalized, user_normalized.unsqueeze(-1)
-        ).squeeze(-1)
-        tau = float(self.config['tau'])
-        # logsumexp(negative/tau) - positive/tau is the stable exact form of
-        # -log(exp(positive/tau) / sum(exp(negative/tau))).  The supplied SSM
-        # denominator intentionally excludes the positive logit.
-        loss = torch.logsumexp(neg_similarity / tau, dim=-1)
-        loss = loss - pos_similarity / tau
-        return loss.mean() + regularization
-    
     def alignment_loss(self,edge_label_index:LongTensor):
         user_emb,item_emb = self.forward(edge_index=self.edge_index)
         user_emb = user_emb[edge_label_index[0]]
@@ -297,6 +271,67 @@ class NRGCF(RecModel):
         )
         self.momentum_loss = torch.zeros(edge_index.size(1)).to(device)
         self.active_edge_count = int(edge_index.size(1))
+        self.objective_message_dropout = float(
+            config.get('objective_message_dropout', 0.0)
+        )
+        raw_user_degree = torch.bincount(
+            edge_index[0], minlength=num_users
+        ).to(torch.float32)
+        if config.get('training_objective') == 'adap_tau':
+            degree_quantile = float(
+                config.get('adap_tau_degree_quantile', 0.2)
+            )
+            degree_threshold = torch.quantile(
+                raw_user_degree, degree_quantile
+            )
+            high_degree_user_mask = raw_user_degree > degree_threshold
+            high_edge_mask = high_degree_user_mask[edge_index[0]]
+            self.adap_tau_high_degree_user_count = int(
+                high_degree_user_mask.sum().item()
+            )
+            self.adap_tau_high_degree_interaction_count = int(
+                high_edge_mask.sum().item()
+            )
+            initial_inverse_temperature = (
+                initial_adap_tau_inverse_temperature(
+                    high_degree_user_count=(
+                        self.adap_tau_high_degree_user_count
+                    ),
+                    high_degree_interaction_count=(
+                        self.adap_tau_high_degree_interaction_count
+                    ),
+                    num_items=num_items,
+                    assumed_positive_gap=float(
+                        config.get('adap_tau_initial_positive_gap', 0.7)
+                    ),
+                )
+            )
+        else:
+            high_degree_user_mask = torch.zeros(
+                num_users, dtype=torch.bool, device=edge_index.device
+            )
+            self.adap_tau_high_degree_user_count = 0
+            self.adap_tau_high_degree_interaction_count = 0
+            initial_inverse_temperature = 10.0
+        self.register_buffer(
+            'adap_tau_high_degree_user_mask', high_degree_user_mask
+        )
+        self.register_buffer(
+            'adap_tau_memory',
+            torch.full((num_users,), float(initial_inverse_temperature)),
+        )
+        self.register_buffer(
+            'adap_tau_previous_user_loss',
+            torch.zeros(num_users, dtype=torch.float32),
+        )
+        self.adap_tau_has_previous_user_loss = False
+        self.adap_tau_initial_inverse_temperature = float(
+            initial_inverse_temperature
+        )
+        self.adap_tau_current_positive_inverse_temperature = float(
+            initial_inverse_temperature
+        )
+        self.last_objective_epoch_state = None
 
     def objective_metadata(self):
         name = str(self.config.get('training_objective', 'bpr'))
@@ -318,14 +353,21 @@ class NRGCF(RecModel):
             return {
                 'name': 'ssm',
                 'description': (
-                    'Sampled-softmax loss with a negative-only denominator '
-                    'and propagated-embedding L2.'
+                    'Adap_tau-reference SSM with B-1 in-batch negatives, a '
+                    'negative-only denominator, and all-layer batch L2.'
                 ),
-                'num_neg': int(self.config['num_neg']),
+                'configured_num_neg_ignored': int(self.config['num_neg']),
                 'tau': float(self.config['tau']),
                 'positive_in_denominator': False,
-                'negative_sampling': 'uniform_item_ids_with_replacement',
-                'regularization': 'sampled_propagated_embedding_l2',
+                'negative_sampling': 'other_positive_items_in_same_batch',
+                'negative_count': 'batch_size_minus_one',
+                'batch_order': 'numpy_shuffle_then_consecutive_slices',
+                'regularization': 'selected_user_and_positive_item_all_layers_l2',
+                'message_dropout': self.objective_message_dropout,
+                'evaluation_scoring': 'raw_propagated_embedding_dot_product',
+                'evaluation_protocol': (
+                    'mask_training_edges_and_select_best_test_recall_at_20'
+                ),
                 'embedding_initialization': initialization,
             }
         if name == 'au':
@@ -342,6 +384,53 @@ class NRGCF(RecModel):
                 'uniformity_sides': 'user_plus_item',
                 'regularization': 'none',
                 'embedding_initialization': initialization,
+            }
+        if name == 'adap_tau':
+            return {
+                'name': 'adap_tau',
+                'description': (
+                    'Adap_tau-reference adaptive inverse-temperature SSM '
+                    'with B-1 in-batch negatives and all-layer batch L2.'
+                ),
+                'mode': self.config['adap_tau_mode'],
+                'configured_num_neg_ignored': int(self.config['num_neg']),
+                'negative_sampling': 'other_positive_items_in_same_batch',
+                'negative_count': 'batch_size_minus_one',
+                'batch_order': 'numpy_shuffle_then_consecutive_slices',
+                'positive_in_denominator': False,
+                'temperature_2': float(
+                    self.config['adap_tau_temperature_2']
+                ),
+                'loss_quantile': float(
+                    self.config['adap_tau_loss_quantile']
+                ),
+                'recalibration_epoch_zero_based': int(
+                    self.config['adap_tau_recalibration_epoch']
+                ),
+                'degree_quantile': float(
+                    self.config['adap_tau_degree_quantile']
+                ),
+                'initial_positive_gap': float(
+                    self.config['adap_tau_initial_positive_gap']
+                ),
+                'initial_inverse_temperature': (
+                    self.adap_tau_initial_inverse_temperature
+                ),
+                'regularization': 'selected_user_and_positive_item_all_layers_l2',
+                'message_dropout': self.objective_message_dropout,
+                'evaluation_scoring': 'raw_propagated_embedding_dot_product',
+                'evaluation_protocol': (
+                    'mask_training_edges_and_select_best_test_recall_at_20'
+                ),
+                'lambert_w_implementation': (
+                    'principal_real_branch_direct_halley_iterations'
+                ),
+                'reference_numeric_difference': (
+                    'direct Lambert W replaces the reference discretized '
+                    'SciPy lookup table; the mathematical mapping is unchanged'
+                ),
+                'embedding_initialization': initialization,
+                'last_epoch_state': self.last_objective_epoch_state,
             }
         raise ValueError('Unsupported training objective: ' + name)
 
@@ -515,7 +604,7 @@ class NRGCF(RecModel):
             'layer_scales': layer_scales,
         }
         
-    def forward(self,edge_index):
+    def _forward_layers(self, edge_index, apply_message_dropout=True):
         user_emb = self.user_embedding.weight
         item_emb = self.item_embedding.weight
         x = torch.cat([user_emb, item_emb], dim=0)
@@ -524,6 +613,13 @@ class NRGCF(RecModel):
         out = [x]
         for i in range(self.config['K']):
             x = self.propagate(edge_index, x=x)
+            if (apply_message_dropout and self.training
+                    and self.objective_message_dropout > 0.0):
+                x = F.dropout(
+                    x,
+                    p=self.objective_message_dropout,
+                    training=True,
+                )
             modulation_strength = self.modulation_progress
             if modulation_strength != 0.0:
                 x_c = self.cross_norm(x)
@@ -540,20 +636,211 @@ class NRGCF(RecModel):
                     # ramp_epochs=0 and therefore never enter this branch.
                     x = modulation_strength * x_c + (1 - modulation_strength) * x
             out.append(x)
-        out = torch.stack(out, dim=1)
+        return torch.stack(out, dim=1)
+
+    def forward(self,edge_index):
+        out = self._forward_layers(edge_index)
         out = out.mean(dim=1)
         user_emb = out[:self.num_users]
         item_emb = out[self.num_users:]
         return user_emb, item_emb
+
+    def _in_batch_layer_embeddings(self, edge_label_index):
+        if edge_label_index.dim() != 2 or edge_label_index.size(0) != 2:
+            raise ValueError(
+                'reference in-batch objectives require [2, batch_size] '
+                'positive interaction indices'
+            )
+        layers = self._forward_layers(self.edge_index)
+        user_layers = layers[:self.num_users][edge_label_index[0]]
+        positive_item_layers = layers[self.num_users:][edge_label_index[1]]
+        return user_layers, positive_item_layers
+
+    def _reference_all_layer_regularization(
+            self, user_layers, positive_item_layers):
+        batch_size = user_layers.size(0)
+        return self.config['decay'] * 0.5 * (
+            user_layers.pow(2).sum()
+            + positive_item_layers.pow(2).sum()
+        ) / batch_size
+
+    def ssm_loss(self, edge_label_index:LongTensor, return_aux=False):
+        """Adap_tau LightGCN SSM: no sampled items, B-1 batch negatives."""
+        user_layers, positive_item_layers = (
+            self._in_batch_layer_embeddings(edge_label_index)
+        )
+        user_embedding = user_layers.mean(dim=1)
+        positive_item_embedding = positive_item_layers.mean(dim=1)
+        instance_loss = ssm_in_batch_instance_loss(
+            user_embedding,
+            positive_item_embedding,
+            temperature=self.config['tau'],
+        )
+        regularization = self._reference_all_layer_regularization(
+            user_layers, positive_item_layers
+        )
+        total = instance_loss.mean() + regularization
+        if return_aux:
+            return total, {'instance_loss': instance_loss.detach()}
+        return total
+
+    def adap_tau_loss(self, edge_label_index:LongTensor, return_aux=False):
+        user_layers, positive_item_layers = (
+            self._in_batch_layer_embeddings(edge_label_index)
+        )
+        user_embedding = user_layers.mean(dim=1)
+        positive_item_embedding = positive_item_layers.mean(dim=1)
+        user_inverse_temperature = self.adap_tau_memory[
+            edge_label_index[0]
+        ].detach()
+        instance_loss, unit_temperature_loss = (
+            adap_tau_in_batch_instance_loss(
+                user_embedding,
+                positive_item_embedding,
+                user_inverse_temperature=user_inverse_temperature,
+                positive_inverse_temperature=(
+                    self.adap_tau_current_positive_inverse_temperature
+                ),
+            )
+        )
+        regularization = self._reference_all_layer_regularization(
+            user_layers, positive_item_layers
+        )
+        total = instance_loss.mean() + regularization
+        if return_aux:
+            return total, {
+                'instance_loss': instance_loss.detach(),
+                'unit_temperature_loss': unit_temperature_loss,
+            }
+        return total
+
+    @torch.no_grad()
+    def prepare_objective_epoch(self, train_edge_index, epoch):
+        """Refresh Adap-tau state before the first update of an epoch."""
+        if self.config.get('training_objective') != 'adap_tau':
+            self.last_objective_epoch_state = None
+            return
+        source_epoch = int(epoch) - 1
+        recalibration_epoch = int(
+            self.config['adap_tau_recalibration_epoch']
+        )
+        inverse_temperature = self.adap_tau_initial_inverse_temperature
+        calibration_source = 'reference_initial_positive_gap'
+        if source_epoch >= recalibration_epoch:
+            layers = self._forward_layers(
+                self.edge_index, apply_message_dropout=False
+            )
+            pooled = layers.mean(dim=1)
+            users = F.normalize(pooled[:self.num_users], dim=-1)
+            items = F.normalize(pooled[self.num_users:], dim=-1)
+            high_edge_mask = self.adap_tau_high_degree_user_mask[
+                train_edge_index[0]
+            ]
+            positive_scores = (
+                users[train_edge_index[0]]
+                * items[train_edge_index[1]]
+            ).sum(dim=-1)
+            positive_mean = positive_scores[high_edge_mask].mean()
+            mean_item = items.mean(dim=0, keepdim=True)
+            all_item_mean_score = (
+                users[self.adap_tau_high_degree_user_mask]
+                @ mean_item.t()
+            ).mean()
+            positive_gap = positive_mean - all_item_mean_score
+            if (not bool(torch.isfinite(positive_gap))
+                    or float(positive_gap.item()) <= 0.0):
+                raise RuntimeError(
+                    'Adap-tau embedding calibration produced a non-positive '
+                    'cosine gap'
+                )
+            c_value = 2.0 * (
+                math.log(0.5)
+                + math.log(
+                    self.adap_tau_high_degree_user_count * self.num_items
+                )
+                - math.log(self.adap_tau_high_degree_interaction_count)
+            )
+            inverse_temperature = float(
+                c_value / (2.0 * float(positive_gap.item()))
+            )
+            calibration_source = 'current_embedding_cosine_gap'
+        self.adap_tau_current_positive_inverse_temperature = float(
+            inverse_temperature
+        )
+        if self.adap_tau_has_previous_user_loss:
+            memory = adap_tau_inverse_temperature(
+                previous_user_loss=self.adap_tau_previous_user_loss,
+                base_inverse_temperature=inverse_temperature,
+                mode=self.config['adap_tau_mode'],
+                temperature_2=self.config['adap_tau_temperature_2'],
+                loss_quantile=self.config['adap_tau_loss_quantile'],
+            )
+        else:
+            memory = torch.full_like(
+                self.adap_tau_memory, float(inverse_temperature)
+            )
+        if not bool(torch.isfinite(memory).all()) or bool((memory <= 0).any()):
+            raise RuntimeError('Adap-tau produced invalid inverse temperatures')
+        self.adap_tau_memory.copy_(memory)
+        self.last_objective_epoch_state = {
+            'epoch': int(epoch),
+            'source_epoch_zero_based': source_epoch,
+            'positive_inverse_temperature': float(inverse_temperature),
+            'user_inverse_temperature_min': float(memory.min().item()),
+            'user_inverse_temperature_mean': float(memory.mean().item()),
+            'user_inverse_temperature_max': float(memory.max().item()),
+            'calibration_source': calibration_source,
+            'uses_previous_epoch_user_loss': bool(
+                self.adap_tau_has_previous_user_loss
+            ),
+        }
+
+    @torch.no_grad()
+    def finish_objective_epoch(self, loss_sum, observation_count):
+        """Store mean unit-temperature loss per user for the next epoch."""
+        if self.config.get('training_objective') != 'adap_tau':
+            return
+        observed = observation_count > 0
+        if not bool(observed.any()):
+            raise RuntimeError('Adap-tau did not observe any training users')
+        user_loss = torch.empty_like(loss_sum)
+        user_loss[observed] = (
+            loss_sum[observed] / observation_count[observed]
+        )
+        fallback = user_loss[observed].mean()
+        user_loss[~observed] = fallback
+        if not bool(torch.isfinite(user_loss).all()):
+            raise RuntimeError('Adap-tau per-user loss contains NaN or Inf')
+        self.adap_tau_previous_user_loss.copy_(user_loss)
+        self.adap_tau_has_previous_user_loss = True
+        if self.last_objective_epoch_state is not None:
+            self.last_objective_epoch_state.update({
+                'observed_user_count': int(observed.sum().item()),
+                'unobserved_user_count': int((~observed).sum().item()),
+                'unit_temperature_user_loss_mean': float(
+                    user_loss[observed].mean().item()
+                ),
+            })
+
+    def objective_epoch_snapshot(self):
+        if self.last_objective_epoch_state is None:
+            return None
+        return dict(self.last_objective_epoch_state)
     
-    def get_loss(self,edge_label_index):
+    def get_loss(self,edge_label_index, return_aux=False):
         objective = self.config.get('training_objective', 'bpr')
         if objective == 'bpr':
-            return self.bpr_loss(edge_label_index) + self.l2_reg(edge_label_index)
+            loss = self.bpr_loss(edge_label_index) + self.l2_reg(edge_label_index)
+            return (loss, None) if return_aux else loss
         if objective == 'ssm':
-            return self.ssm_loss(edge_label_index)
+            return self.ssm_loss(edge_label_index, return_aux=return_aux)
         if objective == 'au':
-            return self.au_loss(edge_label_index)
+            loss = self.au_loss(edge_label_index)
+            return (loss, None) if return_aux else loss
+        if objective == 'adap_tau':
+            return self.adap_tau_loss(
+                edge_label_index, return_aux=return_aux
+            )
         raise ValueError('Unsupported training objective: ' + str(objective))
     
     @torch.no_grad()

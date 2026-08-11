@@ -29,6 +29,20 @@ num_neg = args.num_neg
 
 training_objective = args.training_objective
 
+objective_message_dropout = args.objective_message_dropout
+
+adap_tau_mode = args.adap_tau_mode
+
+adap_tau_temperature_2 = args.adap_tau_temperature_2
+
+adap_tau_loss_quantile = args.adap_tau_loss_quantile
+
+adap_tau_recalibration_epoch = args.adap_tau_recalibration_epoch
+
+adap_tau_degree_quantile = args.adap_tau_degree_quantile
+
+adap_tau_initial_positive_gap = args.adap_tau_initial_positive_gap
+
 au_uniformity_weight = args.au_uniformity_weight
 
 au_uniformity_t = args.au_uniformity_t

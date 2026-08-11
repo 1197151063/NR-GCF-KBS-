@@ -953,7 +953,7 @@ def write_training_summary(
         early_stopping_patience, early_stopped, early_stopping_wait,
         filtering_schedule, configured_filtering_epoch,
         actual_filtering_epoch, adaptive_filtering_trace,
-        training_objective=None):
+        training_objective=None, objective_training_trace=None):
     """Write the compact outcome for a completed or early-stopped run."""
     if training_objective is None:
         training_objective = {
@@ -1009,6 +1009,7 @@ def write_training_summary(
         "bpr_positive_edge_count": int(bpr_positive_edge_count),
         "objective": training_objective["description"],
         "training_objective": training_objective,
+        "objective_training_trace": objective_training_trace or [],
         "representation_modulation": {
             "mode": str(representation_modulation_mode),
             "ramp_epochs": int(representation_modulation_ramp_epochs),

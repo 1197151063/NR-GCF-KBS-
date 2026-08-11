@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Yelp2018 clean-data backbone pilot under SSM and Alignment--Uniformity.
-# Within each objective, compare ordinary LightGCN propagation against the
-# released always-on direct CrossNorm. Edge filtering is disabled throughout.
+# Reproduce the Adap_tau LightGCN training protocol inside NR-GCF, then make
+# one matched CrossNorm comparison per objective.  Yelp has no validation file
+# in either repository, so the existing NR-GCF direct-test Recall@20 selection
+# matches the reference's effective protocol.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dataset=yelp2018
-objectives="${OBJECTIVES:-ssm au}"
+objectives="${OBJECTIVES:-ssm adap_tau}"
 modulation_modes="${MODULATION_MODES:-none original_always}"
-seed="${SEED:-2026}"
+# The reference entry point fixes all random seeds to 2020.
+seed="${SEED:-2020}"
 gpu_id="${GPU_ID:-0}"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v3.3_yelp_objectives}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v3.5_yelp_adap_tau_reference}"
 train_epochs="${TRAIN_EPOCHS:-100}"
-train_patience="${TRAIN_PATIENCE:-20}"
+train_patience="${TRAIN_PATIENCE:-51}"
 dry_run="${DRY_RUN:-0}"
 skip_completed="${SKIP_COMPLETED:-1}"
 
-if [[ "$objectives" != "ssm au" ]]; then
-  echo "This controlled pilot requires OBJECTIVES='ssm au'." >&2
+if [[ "$objectives" != "ssm adap_tau" ]]; then
+  echo "This reproduction requires OBJECTIVES='ssm adap_tau'." >&2
   exit 2
 fi
 if [[ "$modulation_modes" != "none original_always" ]]; then
-  echo "This controlled pilot requires MODULATION_MODES='none original_always'." >&2
+  echo "This reproduction requires MODULATION_MODES='none original_always'." >&2
   exit 2
 fi
 for flag in dry_run skip_completed; do
@@ -32,14 +34,6 @@ for flag in dry_run skip_completed; do
     exit 2
   fi
 done
-if ! [[ "$gpu_id" =~ ^[0-9]+$ ]]; then
-  echo "GPU_ID must be a non-negative integer." >&2
-  exit 2
-fi
-if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
-  echo "SEED must be a non-negative integer." >&2
-  exit 2
-fi
 
 run_combo() {
   local objective="$1"
@@ -67,13 +61,19 @@ run_combo() {
   TRAIN_EPOCHS="$train_epochs" \
   TRAIN_PATIENCE="$train_patience" \
   TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-2048}" \
-  TRAIN_LR="${TRAIN_LR:-0.0005}" \
-  TRAIN_INIT_WEIGHT="${TRAIN_INIT_WEIGHT:-1.0}" \
+  TRAIN_LR="${TRAIN_LR:-0.001}" \
+  TRAIN_DECAY="${TRAIN_DECAY:-0.1}" \
+  TRAIN_INIT_WEIGHT=1.0 \
   TRAINING_OBJECTIVE="$objective" \
-  SSM_NUM_NEG="${SSM_NUM_NEG:-1024}" \
+  SSM_NUM_NEG=1024 \
   SSM_TAU="${SSM_TAU:-0.1}" \
-  AU_UNIFORMITY_WEIGHT="${AU_UNIFORMITY_WEIGHT:-1.0}" \
-  AU_UNIFORMITY_T="${AU_UNIFORMITY_T:-2.0}" \
+  OBJECTIVE_MESSAGE_DROPOUT="${OBJECTIVE_MESSAGE_DROPOUT:-0.1}" \
+  ADAP_TAU_MODE="${ADAP_TAU_MODE:-weight_mean}" \
+  ADAP_TAU_TEMPERATURE_2="${ADAP_TAU_TEMPERATURE_2:-1.5}" \
+  ADAP_TAU_LOSS_QUANTILE="${ADAP_TAU_LOSS_QUANTILE:-1.0}" \
+  ADAP_TAU_RECALIBRATION_EPOCH="${ADAP_TAU_RECALIBRATION_EPOCH:-100}" \
+  ADAP_TAU_DEGREE_QUANTILE="${ADAP_TAU_DEGREE_QUANTILE:-0.2}" \
+  ADAP_TAU_INITIAL_POSITIVE_GAP="${ADAP_TAU_INITIAL_POSITIVE_GAP:-0.7}" \
   EDGE_FILTER_MODE=none \
   REPRESENTATION_MODULATION_MODE="$modulation_mode" \
   REPRESENTATION_MODULATION_RAMP_EPOCHS=0 \
@@ -83,10 +83,6 @@ run_combo() {
   RUN_PILOT_ANALYSIS=0 \
   KEEP_EDGE_LABELS=0 \
   KEEP_GENERATED_TRAIN=0 \
-  STRUCTURAL_MODE=two_hop_minhash \
-  TOPK="${TOPK:-10}" \
-  CHUNK_SIZE="${CHUNK_SIZE:-8192}" \
-  MIN_DEGREE="${MIN_DEGREE:-2}" \
   REQUIRE_CLEAN_REPO="${REQUIRE_CLEAN_REPO:-1}" \
   NRGCF_OMP_NUM_THREADS="${NRGCF_OMP_NUM_THREADS:-4}" \
   DRY_RUN="$dry_run" \
@@ -99,15 +95,17 @@ run_combo() {
   echo "Done objective=$objective modulation=$modulation_mode"
 }
 
-echo "Yelp2018 SSM/AU objective comparison"
-echo "  objectives:          $objectives"
-echo "  propagation modes:   $modulation_modes"
-echo "  edge filtering:      none"
-echo "  SSM negatives/tau:   batch_size-1/${SSM_TAU:-0.1} (num_neg ignored)"
-echo "  AU weight/t:         ${AU_UNIFORMITY_WEIGHT:-1.0}/${AU_UNIFORMITY_T:-2.0}"
-echo "  seed:                $seed"
-echo "  output:              $output_root"
-echo "  planned runs:        4"
+echo "Yelp2018 Adap_tau-reference objective reproduction"
+echo "  objectives:        $objectives"
+echo "  propagation modes: $modulation_modes"
+echo "  negatives:         B-1 in-batch (n_negs ignored)"
+echo "  batch/lr/L2:       ${TRAIN_BATCH_SIZE:-2048}/${TRAIN_LR:-0.001}/${TRAIN_DECAY:-0.1}"
+echo "  message dropout:   ${OBJECTIVE_MESSAGE_DROPOUT:-0.1}"
+echo "  SSM tau:           ${SSM_TAU:-0.1}"
+echo "  Adap-tau mode/t2:  ${ADAP_TAU_MODE:-weight_mean}/${ADAP_TAU_TEMPERATURE_2:-1.5}"
+echo "  selection:         direct test Recall@20, patience $train_patience"
+echo "  output:            $output_root"
+echo "  planned runs:      4"
 
 for objective in $objectives; do
   for modulation_mode in $modulation_modes; do
@@ -133,7 +131,4 @@ python3 "$script_dir/analyze_objective_backbones.py" \
   --output "$output_root/objective_backbone_comparison.json" \
   --markdown "$output_root/objective_backbone_comparison.md"
 
-echo "Yelp2018 objective comparison completed: $output_root"
-echo "  table:    $output_root/objective_backbone_comparison.md"
-echo "  JSON:     $output_root/objective_backbone_comparison.json"
-echo "  all runs: $output_root/all_runs.json"
+echo "Completed: $output_root"

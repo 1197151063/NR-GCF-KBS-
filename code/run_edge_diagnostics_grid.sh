@@ -76,9 +76,18 @@ Optional variables:
   TRAIN_PATIENCE          optional early-stopping patience override
   TRAIN_LR                optional learning-rate override
   TRAIN_INIT_WEIGHT       optional embedding initialization std override
-  TRAINING_OBJECTIVE      bpr, ssm, or au (default: bpr)
-  SSM_NUM_NEG             uniformly sampled negatives for SSM (default: 1024)
+  TRAIN_BATCH_SIZE        optional interaction batch size override
+  TRAIN_DECAY             optional L2 coefficient override
+  TRAINING_OBJECTIVE      bpr, ssm, au, or adap_tau (default: bpr)
+  SSM_NUM_NEG             legacy metadata; ignored by reference in-batch SSM
   SSM_TAU                 SSM cosine-softmax temperature (default: 0.1)
+  OBJECTIVE_MESSAGE_DROPOUT message dropout for normalized objectives
+  ADAP_TAU_MODE           weight_v0, weight_mean, or weight_ratio
+  ADAP_TAU_TEMPERATURE_2  prior-user-loss scale (Yelp default: 1.5)
+  ADAP_TAU_LOSS_QUANTILE  weight_ratio loss quantile (default: 1.0)
+  ADAP_TAU_RECALIBRATION_EPOCH zero-based w_0 recalibration epoch (default: 100)
+  ADAP_TAU_DEGREE_QUANTILE user-degree calibration quantile (default: 0.2)
+  ADAP_TAU_INITIAL_POSITIVE_GAP reference initial cosine gap (default: 0.7)
   AU_UNIFORMITY_WEIGHT    coefficient on bilateral uniformity (default: 1)
   AU_UNIFORMITY_T         pairwise uniformity temperature (default: 2)
   EDGE_FILTER_MODE        current, none, hard_consensus, hard_structure_only,
@@ -160,9 +169,18 @@ train_epochs="${TRAIN_EPOCHS:-}"
 train_patience="${TRAIN_PATIENCE:-}"
 train_lr="${TRAIN_LR:-}"
 train_init_weight="${TRAIN_INIT_WEIGHT:-}"
+train_batch_size="${TRAIN_BATCH_SIZE:-}"
+train_decay="${TRAIN_DECAY:-}"
 training_objective="${TRAINING_OBJECTIVE:-bpr}"
 ssm_num_neg="${SSM_NUM_NEG:-1024}"
 ssm_tau="${SSM_TAU:-0.1}"
+objective_message_dropout="${OBJECTIVE_MESSAGE_DROPOUT:-0.0}"
+adap_tau_mode="${ADAP_TAU_MODE:-weight_mean}"
+adap_tau_temperature_2="${ADAP_TAU_TEMPERATURE_2:-1.5}"
+adap_tau_loss_quantile="${ADAP_TAU_LOSS_QUANTILE:-1.0}"
+adap_tau_recalibration_epoch="${ADAP_TAU_RECALIBRATION_EPOCH:-100}"
+adap_tau_degree_quantile="${ADAP_TAU_DEGREE_QUANTILE:-0.2}"
+adap_tau_initial_positive_gap="${ADAP_TAU_INITIAL_POSITIVE_GAP:-0.7}"
 au_uniformity_weight="${AU_UNIFORMITY_WEIGHT:-1.0}"
 au_uniformity_t="${AU_UNIFORMITY_T:-2.0}"
 edge_filter_mode="${EDGE_FILTER_MODE:-current}"
@@ -204,29 +222,63 @@ if [[ "$edge_filter_mode" != "current" && "$edge_filter_mode" != "none" && \
 fi
 if [[ "$training_objective" != "bpr" && \
       "$training_objective" != "ssm" && \
-      "$training_objective" != "au" ]]; then
-  echo "TRAINING_OBJECTIVE must be bpr, ssm, or au." >&2
+      "$training_objective" != "au" && \
+      "$training_objective" != "adap_tau" ]]; then
+  echo "TRAINING_OBJECTIVE must be bpr, ssm, au, or adap_tau." >&2
   exit 2
 fi
 if [[ "$training_objective" != "bpr" && "$edge_filter_mode" != "none" ]]; then
-  echo "SSM/AU objective pilots require EDGE_FILTER_MODE=none." >&2
+  echo "SSM/AU/Adap-tau objective pilots require EDGE_FILTER_MODE=none." >&2
+  exit 2
+fi
+if [[ -n "$train_batch_size" ]] && \
+   { ! [[ "$train_batch_size" =~ ^[0-9]+$ ]] || [[ "$train_batch_size" -lt 1 ]]; }; then
+  echo "TRAIN_BATCH_SIZE must be a positive integer." >&2
   exit 2
 fi
 if ! [[ "$ssm_num_neg" =~ ^[0-9]+$ ]] || [[ "$ssm_num_neg" -lt 1 ]]; then
   echo "SSM_NUM_NEG must be a positive integer." >&2
   exit 2
 fi
-python3 - "$ssm_tau" "$au_uniformity_weight" "$au_uniformity_t" <<'PY'
+if [[ "$adap_tau_mode" != "weight_v0" && \
+      "$adap_tau_mode" != "weight_mean" && \
+      "$adap_tau_mode" != "weight_ratio" ]]; then
+  echo "ADAP_TAU_MODE must be weight_v0, weight_mean, or weight_ratio." >&2
+  exit 2
+fi
+if ! [[ "$adap_tau_recalibration_epoch" =~ ^[0-9]+$ ]]; then
+  echo "ADAP_TAU_RECALIBRATION_EPOCH must be a non-negative integer." >&2
+  exit 2
+fi
+python3 - "$ssm_tau" "$au_uniformity_weight" "$au_uniformity_t" \
+  "$objective_message_dropout" "$adap_tau_temperature_2" \
+  "$adap_tau_loss_quantile" "$adap_tau_degree_quantile" \
+  "$adap_tau_initial_positive_gap" "${train_decay:-0}" <<'PY'
 import math
 import sys
 
-tau, weight, uniformity_t = map(float, sys.argv[1:])
+(
+    tau, weight, uniformity_t, message_dropout, adap_t2,
+    loss_quantile, degree_quantile, initial_gap, train_decay,
+) = map(float, sys.argv[1:])
 if not math.isfinite(tau) or tau <= 0:
     raise SystemExit("SSM_TAU must be finite and positive")
 if not math.isfinite(weight) or weight < 0:
     raise SystemExit("AU_UNIFORMITY_WEIGHT must be finite and non-negative")
 if not math.isfinite(uniformity_t) or uniformity_t <= 0:
     raise SystemExit("AU_UNIFORMITY_T must be finite and positive")
+if not math.isfinite(message_dropout) or not 0 <= message_dropout < 1:
+    raise SystemExit("OBJECTIVE_MESSAGE_DROPOUT must be within [0, 1)")
+if not math.isfinite(adap_t2) or adap_t2 <= 0:
+    raise SystemExit("ADAP_TAU_TEMPERATURE_2 must be finite and positive")
+if not math.isfinite(loss_quantile) or not 0 <= loss_quantile <= 1:
+    raise SystemExit("ADAP_TAU_LOSS_QUANTILE must be within [0, 1]")
+if not math.isfinite(degree_quantile) or not 0 <= degree_quantile <= 1:
+    raise SystemExit("ADAP_TAU_DEGREE_QUANTILE must be within [0, 1]")
+if not math.isfinite(initial_gap) or initial_gap <= 0:
+    raise SystemExit("ADAP_TAU_INITIAL_POSITIVE_GAP must be positive")
+if not math.isfinite(train_decay) or train_decay < 0:
+    raise SystemExit("TRAIN_DECAY must be finite and non-negative")
 PY
 if ! [[ "$reliability_filter_epoch" =~ ^[0-9]+$ ]] || \
    [[ "$reliability_filter_epoch" -lt 2 ]]; then
@@ -668,10 +720,13 @@ echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
 echo "  training objective: $training_objective"
 if [[ "$training_objective" == "ssm" ]]; then
-  echo "  SSM negatives/tau: ${ssm_num_neg}/${ssm_tau}"
+  echo "  SSM negatives/tau: batch_size-1/${ssm_tau} (num_neg ignored)"
 elif [[ "$training_objective" == "au" ]]; then
   echo "  AU uniformity weight/t: ${au_uniformity_weight}/${au_uniformity_t}"
+elif [[ "$training_objective" == "adap_tau" ]]; then
+  echo "  Adap-tau mode/t2: ${adap_tau_mode}/${adap_tau_temperature_2}"
 fi
+echo "  objective message dropout: $objective_message_dropout"
 echo "  reliability filter epoch: $reliability_filter_epoch"
 echo "  reliability filter schedule: $reliability_filter_schedule"
 if [[ "$reliability_filter_schedule" == "adaptive" ]]; then
@@ -688,6 +743,8 @@ echo "  reliability structure weight: $reliability_structure_weight"
 echo "  reliability max removal ratio: $reliability_max_removal_ratio"
 echo "  train lr: ${train_lr:-entry_default}"
 echo "  train init weight: ${train_init_weight:-entry_default}"
+echo "  train batch size: ${train_batch_size:-entry_default}"
+echo "  train decay: ${train_decay:-entry_default}"
 echo "  summary only: $summary_only"
 echo "  dry run:    $dry_run"
 
@@ -792,6 +849,13 @@ for ratio in $noise_ratios; do
       --training-objective "$training_objective"
       --num_neg "$ssm_num_neg"
       --tau "$ssm_tau"
+      --objective-message-dropout "$objective_message_dropout"
+      --adap-tau-mode "$adap_tau_mode"
+      --adap-tau-temperature-2 "$adap_tau_temperature_2"
+      --adap-tau-loss-quantile "$adap_tau_loss_quantile"
+      --adap-tau-recalibration-epoch "$adap_tau_recalibration_epoch"
+      --adap-tau-degree-quantile "$adap_tau_degree_quantile"
+      --adap-tau-initial-positive-gap "$adap_tau_initial_positive_gap"
       --au-uniformity-weight "$au_uniformity_weight"
       --au-uniformity-t "$au_uniformity_t"
       --edge-filter-mode "$edge_filter_mode"
@@ -848,6 +912,12 @@ for ratio in $noise_ratios; do
     if [[ -n "$train_init_weight" ]]; then
       command+=(--init_weight "$train_init_weight")
     fi
+    if [[ -n "$train_batch_size" ]]; then
+      command+=(--bpr_batch "$train_batch_size")
+    fi
+    if [[ -n "$train_decay" ]]; then
+      command+=(--decay "$train_decay")
+    fi
 
     {
       echo "base_commit=$commit_hash"
@@ -889,6 +959,15 @@ for ratio in $noise_ratios; do
       echo "train_patience=${train_patience:-entry_default}"
       echo "train_lr=${train_lr:-entry_default}"
       echo "train_init_weight=${train_init_weight:-entry_default}"
+      echo "train_batch_size=${train_batch_size:-entry_default}"
+      echo "train_decay=${train_decay:-entry_default}"
+      echo "objective_message_dropout=$objective_message_dropout"
+      echo "adap_tau_mode=$adap_tau_mode"
+      echo "adap_tau_temperature_2=$adap_tau_temperature_2"
+      echo "adap_tau_loss_quantile=$adap_tau_loss_quantile"
+      echo "adap_tau_recalibration_epoch=$adap_tau_recalibration_epoch"
+      echo "adap_tau_degree_quantile=$adap_tau_degree_quantile"
+      echo "adap_tau_initial_positive_gap=$adap_tau_initial_positive_gap"
       printf 'command='
       printf '%q ' "${command[@]}"
       printf '\n'
