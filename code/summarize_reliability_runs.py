@@ -10,6 +10,23 @@ def _read(path):
         return json.load(stream)
 
 
+def _manifest(path):
+    if not path.exists():
+        return {}
+    result = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            result[key] = value
+    return result
+
+
+def _number(value, cast=float):
+    if value is None or value == "":
+        return None
+    return cast(value)
+
+
 def _metric(evaluation, name, field):
     if not evaluation:
         return None
@@ -23,10 +40,24 @@ def _metric(evaluation, name, field):
 def summarize(root):
     root = Path(root).resolve()
     runs = []
-    for reliability_path in sorted(root.glob("**/edge_reliability/reliability_summary.json")):
-        reliability = _read(reliability_path)
-        training_path = reliability_path.with_name("training_summary.json")
+    training_paths = set(root.glob("**/edge_reliability/training_summary.json"))
+    reliability_paths = set(
+        root.glob("**/edge_reliability/reliability_summary.json")
+    )
+    training_paths.update(
+        path.with_name("training_summary.json") for path in reliability_paths
+    )
+    for training_path in sorted(training_paths):
+        reliability_path = training_path.with_name("reliability_summary.json")
+        reliability = _read(reliability_path) if reliability_path.exists() else {}
         training = _read(training_path) if training_path.exists() else {}
+        run_dir = training_path.parent.parent
+        manifest = _manifest(run_dir / "run_manifest.txt")
+        noise_validation_path = run_dir / "noise_validation.json"
+        noise_validation = (
+            _read(noise_validation_path) if noise_validation_path.exists()
+            else {}
+        )
         evaluation = reliability.get("synthetic_label_evaluation")
         representation_modulation = (
             training.get("representation_modulation")
@@ -41,13 +72,17 @@ def summarize(root):
         adaptive_trace = adaptive_filtering.get("trace") or []
         trigger_snapshot = adaptive_trace[-1] if adaptive_trace else {}
         runs.append({
-            "run": str(reliability_path.parent.parent.relative_to(root)),
-            "dataset": reliability.get("dataset"),
-            "mode": reliability.get("mode"),
+            "run": str(run_dir.relative_to(root)),
+            "dataset": reliability.get("dataset") or manifest.get("dataset"),
+            "mode": reliability.get("mode") or manifest.get("edge_filter_mode"),
             "training_objective": training_objective.get("name", "bpr"),
             "training_objective_metadata": training_objective,
-            "seed": reliability.get("seed"),
-            "requested_noise_ratio": reliability.get("requested_noise_ratio"),
+            "seed": reliability.get("seed") or _number(manifest.get("seed"), int),
+            "requested_noise_ratio": (
+                reliability.get("requested_noise_ratio")
+                if reliability.get("requested_noise_ratio") is not None
+                else _number(manifest.get("requested_noise_ratio"))
+            ),
             "filtering_epoch": reliability.get("filtering_epoch"),
             "filtering_schedule": (
                 adaptive_filtering.get("schedule")
@@ -76,7 +111,10 @@ def summarize(root):
                 "capped_adaptive_budget_count"
             ),
             "actual_noise_ratio": (
-                (reliability.get("noise_validation") or {}).get("actual_noise_ratio")
+                (reliability.get("noise_validation") or {}).get(
+                    "actual_noise_ratio"
+                )
+                if reliability else noise_validation.get("actual_noise_ratio")
             ),
             "epochs_completed": training.get("epochs_completed"),
             "completed_requested_epochs": training.get("completed_requested_epochs"),

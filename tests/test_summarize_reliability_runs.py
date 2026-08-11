@@ -14,6 +14,39 @@ from summarize_reliability_runs import summarize
 
 
 class SummarizeReliabilityRunsTest(unittest.TestCase):
+    def test_summarizes_training_only_run_when_filtering_is_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "case" / "yelp2018" / "run"
+            output = run / "edge_reliability"
+            output.mkdir(parents=True)
+            (run / "run_manifest.txt").write_text(
+                "dataset=yelp2018\n"
+                "seed=2020\n"
+                "requested_noise_ratio=0.2\n"
+                "edge_filter_mode=none\n",
+                encoding="utf-8",
+            )
+            (run / "noise_validation.json").write_text(
+                json.dumps({"actual_noise_ratio": 0.2}), encoding="utf-8"
+            )
+            (output / "training_summary.json").write_text(json.dumps({
+                "epochs_completed": 12,
+                "best_epoch": 3,
+                "best_recall_at_20": 0.1,
+                "best_ndcg_at_20": 0.08,
+                "training_objective": {"name": "ssm"},
+                "representation_modulation": {"mode": "original_always"},
+            }), encoding="utf-8")
+            report = summarize(root)
+            self.assertEqual(report["run_count"], 1)
+            row = report["runs"][0]
+            self.assertEqual(row["dataset"], "yelp2018")
+            self.assertEqual(row["mode"], "none")
+            self.assertEqual(row["training_objective"], "ssm")
+            self.assertEqual(row["requested_noise_ratio"], 0.2)
+            self.assertEqual(row["actual_noise_ratio"], 0.2)
+
     def test_merges_only_compact_json_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
