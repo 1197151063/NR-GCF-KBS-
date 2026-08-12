@@ -383,6 +383,7 @@ class NRGCF(RecModel):
                 'uniformity_t': float(self.config['au_uniformity_t']),
                 'uniformity_sides': 'user_plus_item',
                 'regularization': 'none',
+                'message_dropout': self.objective_message_dropout,
                 'embedding_initialization': initialization,
             }
         if name == 'adap_tau':
