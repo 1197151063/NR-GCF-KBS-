@@ -77,6 +77,13 @@ def summarize(root):
             "mode": reliability.get("mode") or manifest.get("edge_filter_mode"),
             "training_objective": training_objective.get("name", "bpr"),
             "training_objective_metadata": training_objective,
+            "train_learning_rate": _number(manifest.get("train_lr")),
+            "train_decay": _number(manifest.get("train_decay")),
+            "train_batch_size": _number(
+                manifest.get("train_batch_size"), int
+            ),
+            "train_init_method": manifest.get("train_init_method"),
+            "train_init_weight": _number(manifest.get("train_init_weight")),
             "seed": reliability.get("seed") or _number(manifest.get("seed"), int),
             "requested_noise_ratio": (
                 reliability.get("requested_noise_ratio")
