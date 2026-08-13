@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Focused clean LastFM SSM grid on the ordinary LightGCN backbone.
-# Only learning rate and temperature vary; filtering and CrossNorm are off.
+# Focused clean ML-1M SSM grid on the ordinary LightGCN backbone.
+# The LastFM pilot placed its optimum at tau=0.5, so this grid drops the
+# consistently weak tau=0.05 arm and adds tau=1.0 to test the upper boundary.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v4.5_lastfm_ssm_lr_tau}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v4.6_ml1m_ssm_lr_tau}"
 learning_rates="${LEARNING_RATES:-0.0001 0.0005 0.001}"
-temperatures="${TEMPERATURES:-0.05 0.1 0.2 0.5}"
+temperatures="${TEMPERATURES:-0.1 0.2 0.5 1.0}"
 seed="${SEED:-2026}"
 gpu_id="${GPU_ID:-0}"
 decay="${TRAIN_DECAY:-0.0001}"
@@ -29,8 +30,8 @@ if ! [[ "$gpu_id" =~ ^[0-9]+$ && "$seed" =~ ^[0-9]+$ ]]; then
   echo "GPU_ID and SEED must be non-negative integers." >&2
   exit 2
 fi
-if [[ ! -f "$script_dir/../data/lastfm/train.txt" || ! -f "$script_dir/../data/lastfm/test.txt" ]]; then
-  echo "Missing converted LastFM train.txt or test.txt." >&2
+if [[ ! -f "$script_dir/../data/ml-1m/train.txt" || ! -f "$script_dir/../data/ml-1m/test.txt" ]]; then
+  echo "Missing converted ML-1M train.txt or test.txt." >&2
   exit 2
 fi
 read -r -a lr_values <<<"$learning_rates"
@@ -70,7 +71,7 @@ run_case() {
   fi
 
   echo "Start lr=$learning_rate tau=$temperature"
-  DATASET=lastfm \
+  DATASET=ml-1m \
   NOISE_MODE=degree_preserving_replace \
   NOISE_RATIOS=0 \
   SEEDS="$seed" \
@@ -108,7 +109,7 @@ run_case() {
 }
 
 combination_count=$((${#lr_values[@]} * ${#tau_values[@]}))
-echo "LastFM clean SSM LightGCN lr/tau grid"
+echo "ML-1M clean SSM LightGCN lr/tau grid"
 echo "  learning rates:    $learning_rates"
 echo "  temperatures:      $temperatures"
 echo "  fixed decay:       $decay"
@@ -137,7 +138,7 @@ python3 "$script_dir/summarize_reliability_runs.py" \
 analysis_command=(
   python3 "$script_dir/analyze_lastfm_ssm_lr_tau_grid.py"
   --input "$output_root/all_runs.json"
-  --dataset lastfm
+  --dataset ml-1m
   --learning-rates
 )
 analysis_command+=("${lr_values[@]}")
@@ -148,12 +149,12 @@ analysis_command+=(
   --decay "$decay"
   --message-dropout "$message_dropout"
   --batch-size "$batch_size"
-  --output "$output_root/lastfm_ssm_lr_tau_grid.json"
-  --markdown "$output_root/lastfm_ssm_lr_tau_grid.md"
+  --output "$output_root/ml1m_ssm_lr_tau_grid.json"
+  --markdown "$output_root/ml1m_ssm_lr_tau_grid.md"
 )
 "${analysis_command[@]}"
 
-echo "LastFM SSM grid completed: $output_root"
-echo "  table: $output_root/lastfm_ssm_lr_tau_grid.md"
-echo "  JSON:  $output_root/lastfm_ssm_lr_tau_grid.json"
+echo "ML-1M SSM grid completed: $output_root"
+echo "  table: $output_root/ml1m_ssm_lr_tau_grid.md"
+echo "  JSON:  $output_root/ml1m_ssm_lr_tau_grid.json"
 echo "  runs:  $output_root/all_runs.json"

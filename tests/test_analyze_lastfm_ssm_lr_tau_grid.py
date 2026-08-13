@@ -74,6 +74,22 @@ class LastFMSSMLrTauGridTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Modulation is active"):
             self.analyze(rows)
 
+    def test_supports_ml1m(self):
+        rows = [
+            run(0.0001, 0.1, 0.10, 10),
+            run(0.0001, 0.5, 0.11, 8),
+            run(0.001, 0.1, 0.12, 1),
+            run(0.001, 0.5, 0.09, 2),
+        ]
+        for row in rows:
+            row["dataset"] = "ml-1m"
+        result = analysis.analyze(
+            {"runs": rows}, learning_rates=[0.0001, 0.001],
+            temperatures=[0.1, 0.5], seed=2026, decay=0.0001,
+            message_dropout=0.0, batch_size=2048, dataset="ml-1m")
+        self.assertEqual(result["dataset"], "ml-1m")
+        self.assertIn("# ML-1M LightGCN", analysis.markdown(result))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,4 @@
-"""Validate and rank the clean LastFM LightGCN SSM lr/tau grid."""
+"""Validate and rank a clean LightGCN SSM learning-rate/tau grid."""
 
 import argparse
 import json
@@ -22,7 +22,8 @@ def _close(actual, expected):
 
 def analyze(
         report, learning_rates, temperatures, seed, decay,
-        message_dropout, batch_size):
+        message_dropout, batch_size, dataset="lastfm"):
+    dataset = str(dataset)
     learning_rates = sorted(float(value) for value in learning_rates)
     temperatures = sorted(float(value) for value in temperatures)
     seed = int(seed)
@@ -33,7 +34,7 @@ def analyze(
     }
     matched = {}
     for row in report.get("runs", []):
-        if row.get("dataset") != "lastfm":
+        if row.get("dataset") != dataset:
             continue
         if row.get("training_objective") != "ssm":
             continue
@@ -100,8 +101,8 @@ def analyze(
         row["rank"] = rank
     best = rows[0]
     return {
-        "schema_version": "nrgcf_lastfm_ssm_lr_tau_grid_v1",
-        "dataset": "lastfm",
+        "schema_version": "nrgcf_ssm_lr_tau_grid_v2",
+        "dataset": dataset,
         "training_objective": "ssm",
         "backbone": "lightgcn",
         "noise_ratio": 0.0,
@@ -138,8 +139,12 @@ def analyze(
 
 def markdown(report):
     fixed = report["fixed_configuration"]
+    dataset_label = {
+        "lastfm": "LastFM",
+        "ml-1m": "ML-1M",
+    }.get(report["dataset"], report["dataset"])
     lines = [
-        "# LastFM LightGCN SSM learning-rate/temperature grid",
+        "# %s LightGCN SSM learning-rate/temperature grid" % dataset_label,
         "",
         "Clean graph, no edge filtering, and no representation modulation.",
         "",
@@ -176,6 +181,7 @@ def markdown(report):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
+    parser.add_argument("--dataset", default="lastfm")
     parser.add_argument("--learning-rates", nargs="+", type=float, required=True)
     parser.add_argument("--temperatures", nargs="+", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -190,14 +196,14 @@ def main():
             json.load(stream), learning_rates=args.learning_rates,
             temperatures=args.temperatures, seed=args.seed,
             decay=args.decay, message_dropout=args.message_dropout,
-            batch_size=args.batch_size)
+            batch_size=args.batch_size, dataset=args.dataset)
     Path(args.output).write_text(
         json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8")
     Path(args.markdown).write_text(markdown(result), encoding="utf-8")
     best = result["best_observed"]
-    print("Best LastFM SSM: lr=%g tau=%g Recall@20=%.6f epoch=%d" % (
-        best["learning_rate"], best["temperature"],
+    print("Best %s SSM: lr=%g tau=%g Recall@20=%.6f epoch=%d" % (
+        result["dataset"], best["learning_rate"], best["temperature"],
         best["best_recall_at_20"], best["best_epoch"]))
 
 
