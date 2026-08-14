@@ -1,6 +1,6 @@
 # NR-GCF KBS 项目记忆入口
 
-- 最后更新：2026-08-06
+- 最后更新：2026-08-14
 - 模型代码基线：以当前 `main` HEAD 为准；AI_MEMORY 初始快照建立于 `b30a463` 之后。
 - 工作仓库：`https://github.com/1197151063/NR-GCF-KBS-.git`
 - 主要远程目录：`/root/cyj/NR-GCF-KBS-/code`
@@ -9,15 +9,25 @@
 ## 新 session 的推荐阅读顺序
 
 1. 本文件：了解当前结论和不能再走的弯路。
-2. [`01_RESEARCH_SCOPE.md`](01_RESEARCH_SCOPE.md)：研究目标、禁止事项和评价原则。
-3. [`05_CURRENT_METHOD.md`](05_CURRENT_METHOD.md)：当前正在验证的方法及数学定义。
-4. [`04_EXPERIMENT_HISTORY.md`](04_EXPERIMENT_HISTORY.md)：所有重要实验结果和已失败方案。
-5. [`07_OPEN_QUESTIONS.md`](07_OPEN_QUESTIONS.md)：下一步应做什么。
-6. 需要改代码时再读 [`02_CODEBASE_AND_TRUE_BEHAVIOR.md`](02_CODEBASE_AND_TRUE_BEHAVIOR.md) 和 [`03_DIAGNOSTICS_AND_NOISE.md`](03_DIAGNOSTICS_AND_NOISE.md)。
-7. 需要在服务器运行时读 [`06_REMOTE_RUNBOOK.md`](06_REMOTE_RUNBOOK.md)。
-8. 新建 session 时可直接复制 [`08_NEW_SESSION_PROMPT.md`](08_NEW_SESSION_PROMPT.md) 中的提示词。
+2. [`09_EXPERIMENT_LEDGER.md`](09_EXPERIMENT_LEDGER.md)：当前最高优先级的实验账本、参数与有效性边界。
+3. [`01_RESEARCH_SCOPE.md`](01_RESEARCH_SCOPE.md)：研究目标、禁止事项和评价原则。
+4. [`05_CURRENT_METHOD.md`](05_CURRENT_METHOD.md)：当前正在验证的方法及数学定义。
+5. [`04_EXPERIMENT_HISTORY.md`](04_EXPERIMENT_HISTORY.md)：所有重要实验结果和已失败方案。
+6. [`07_OPEN_QUESTIONS.md`](07_OPEN_QUESTIONS.md)：下一步应做什么。
+7. 需要改代码时再读 [`02_CODEBASE_AND_TRUE_BEHAVIOR.md`](02_CODEBASE_AND_TRUE_BEHAVIOR.md) 和 [`03_DIAGNOSTICS_AND_NOISE.md`](03_DIAGNOSTICS_AND_NOISE.md)。
+8. 需要在服务器运行时读 [`06_REMOTE_RUNBOOK.md`](06_REMOTE_RUNBOOK.md)。
+9. 新建 session 时可直接复制 [`08_NEW_SESSION_PROMPT.md`](08_NEW_SESSION_PROMPT.md) 中的提示词。
 
-## 当前最重要的状态
+## 2026-08-14 当前快照
+
+- 现有 clean/noisy、Filter、Norm、objective 和超参数证据已经冻结到 [`../experiment_archive/2026-08-14/README.md`](../experiment_archive/2026-08-14/README.md)。
+- 当前启动的是 BPR 主 noise curve：LightGCN 对比完整 Filter+Norm，四个数据集、六个 noise ratio，共 48 runs；四臂组成消融随后补充。
+- 当前 profile 位于 [`../configs/full_bpr_edge_filter_norm.json`](../configs/full_bpr_edge_filter_norm.json)，运行器为 [`../code/run_full_edge_filter_norm_bpr.sh`](../code/run_full_edge_filter_norm_bpr.sh)。
+- Yelp/Amazon 使用 `mu=0.4, w_s=0.6`；LastFM/ML-1M 使用 `mu=0.2, w_s=0.95`，删边 cap 分别为 4%/0.5%。
+- SSM/AU 仍是无过滤 CrossNorm compatibility；不是完整 Filter+Norm 结果。
+- 下方“当前最重要的状态”保留 2026-08-06 的历史演化上下文；若与 `09_EXPERIMENT_LEDGER.md` 冲突，以后者为准。
+
+## 2026-08-06 历史快照（仅用于追溯）
 
 - 已验证：Yelp2018、20% uniform degree-preserving replacement noise 下，结构一致性是强噪声信号。
 - 已验证：稳定 per-edge EMA BPR loss 能补充结构信号；旧配置下 T=20 比 T=10/15 更好，但该结论不直接适用于 epoch 1 开启 CrossNorm 的快速收敛配置。
@@ -52,7 +62,7 @@
 - 曾经照搬论文的 `min(mean_norm_squared, 1)`，导致 divisor 几乎恒为 1，三个 modulation 模式完全相同。该实验无效，不得引用为 modulation 无效的证据。
 - `origin/main` 是原始 NRGCF 仓库；`kbs/main` 才是本项目开发分支。服务器应从 NR-GCF-KBS- 仓库拉取。
 
-## 当前代码版本的验收标准
+## 2026-08-06 代码验收标准（历史）
 
 - 三个传播层都要在 summary trace 中出现实际 RMS divisor。
 - `original_always` 从 epoch 1 起 `effective_strength=1`。

@@ -19,7 +19,50 @@ git rev-parse --short HEAD
 
 注意：服务器 clone 的 remote 通常名为 `origin`，指向 NR-GCF-KBS-；本地开发机的该 remote 名为 `kbs`。
 
-## 当前推荐实验：Amazon-Book outputs_v2.0
+## 当前推荐实验：BPR 完整方法 noise curve
+
+先确认本地新增的 profile、运行器和分析器已提交并推送，再在服务器执行：
+
+```bash
+conda activate cyj
+cd /root/cyj/NR-GCF-KBS-/code
+
+OUT=/root/autodl-tmp/outputs/outputs_v5.2_bpr_full_noise_curve
+mkdir -p "$OUT"
+
+nohup env \
+  GPU_ID=0 \
+  OUTPUT_ROOT="$OUT" \
+  DATASETS="yelp2018 amazon-book lastfm ml-1m" \
+  NOISE_RATIOS="0 0.1 0.2 0.3 0.4 0.5" \
+  SEEDS="2026" \
+  ARMS="lightgcn full" \
+  REQUIRE_CLEAN_REPO=1 \
+  bash ./run_full_edge_filter_norm_bpr.sh \
+  > "$OUT/run.log" 2>&1 &
+```
+
+查看进度：
+
+```bash
+tail -f /root/autodl-tmp/outputs/outputs_v5.2_bpr_full_noise_curve/run.log
+```
+
+默认共 48 runs：四个数据集 × 六个 noise ratio × LightGCN/Full 两个方法。每个 case 使用独立目录；已完成 case 有 `comparison_summary.json` 时会跳过。若某个 case 中断，先只移动该 case 目录，再重新执行相同命令。脚本默认 `SUMMARY_ONLY=1`，不保留 per-edge CSV 和临时 generated train。
+
+后续需要做严格组成消融时，可复用同一脚本并显式设置
+`ARMS="lightgcn norm_only filter_only full"`。
+
+完成后重点回传：
+
+- `all_runs.json`
+- `full_edge_filter_norm_summary.json`
+- `full_edge_filter_norm_summary.md`
+- `run.log`
+- 各 case 的 `comparison_summary.json`
+- 各 run 的 `edge_reliability/training_summary.json`、`reliability_summary.json`、`run_manifest.txt` 与 `training.log`
+
+## 历史实验：Amazon-Book outputs_v2.0
 
 ```bash
 cd /root/cyj/NR-GCF-KBS-/code

@@ -1,0 +1,113 @@
+{
+  "archive_date": "2026-08-14",
+  "schema_version": "nrgcf_experiment_snapshot_v1",
+  "evidence_level": "single-seed exploratory unless explicitly stated otherwise",
+  "protocol": {
+    "primary_metric": "Recall@20",
+    "secondary_metric": "NDCG@20",
+    "selection_split": "test",
+    "early_stopping_patience": 20,
+    "synthetic_noise": "uniform degree-preserving edge replacement",
+    "primary_noise_ratios": [0.0, 0.2]
+  },
+  "next_experiment": {
+    "objective": "bpr",
+    "datasets": ["yelp2018", "amazon-book", "lastfm", "ml-1m"],
+    "arms": ["lightgcn", "full"],
+    "noise_ratios": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+    "seeds": [2026],
+    "planned_run_count": 48
+  },
+  "selected_full_bpr_profiles": {
+    "yelp2018": {
+      "learning_rate": 0.0005,
+      "decay": 0.0001,
+      "modulation_weight": 0.4,
+      "structure_weight": 0.6,
+      "max_removal_ratio": 1.0,
+      "filter_schedule": "adaptive",
+      "adaptive_window": [2, 4],
+      "stable_checks": 1,
+      "clean_exact_shared_combination_confirmed": false
+    },
+    "amazon-book": {
+      "learning_rate": 0.0005,
+      "decay": 0.0001,
+      "modulation_weight": 0.4,
+      "structure_weight": 0.6,
+      "max_removal_ratio": 1.0,
+      "filter_schedule": "adaptive",
+      "adaptive_window": [2, 4],
+      "stable_checks": 1,
+      "clean_exact_shared_combination_confirmed": true
+    },
+    "lastfm": {
+      "learning_rate": 0.0005,
+      "decay": 0.001,
+      "modulation_weight": 0.2,
+      "structure_weight": 0.95,
+      "max_removal_ratio": 0.04,
+      "filter_schedule": "fixed",
+      "filter_epoch": 10
+    },
+    "ml-1m": {
+      "learning_rate": 0.0005,
+      "decay": 0.001,
+      "modulation_weight": 0.2,
+      "structure_weight": 0.95,
+      "max_removal_ratio": 0.005,
+      "filter_schedule": "adaptive",
+      "adaptive_window": [5, 10],
+      "stable_checks": 2
+    }
+  },
+  "filter_and_norm_bpr": {
+    "yelp2018": {
+      "fusion_best_by_condition": {
+        "clean": {"structure_weight": 0.95, "recall": 0.066854, "ndcg": 0.054743, "removed_ratio": 0.0891},
+        "noise_0.2": {"structure_weight": 0.6, "recall": 0.057129, "ndcg": 0.046194, "removed_ratio": 0.1131}
+      },
+      "modulation_best_by_condition": {
+        "clean": {"modulation_weight": 0.6, "recall": 0.068542, "ndcg": 0.056604, "removed_ratio": 0.0848},
+        "noise_0.2": {"modulation_weight": 0.4, "recall": 0.059227, "ndcg": 0.047874, "removed_ratio": 0.1135}
+      }
+    },
+    "amazon-book": {
+      "clean": {"structure_weight": 0.6, "modulation_weight": 0.4, "recall": 0.047039, "ndcg": 0.036912, "removed_ratio": 0.0891},
+      "noise_0.2": {"structure_weight": 0.6, "modulation_weight": 0.4, "recall": 0.035649, "ndcg": 0.027635, "removed_ratio": 0.0988}
+    },
+    "lastfm": {
+      "norm_only_clean": {"recall": 0.312584, "ndcg": 0.302001},
+      "norm_only_noise_0.2": {"recall": 0.253798, "ndcg": 0.233357},
+      "full_clean": {"recall": 0.311659, "ndcg": 0.300003, "removed_ratio": 0.04},
+      "full_noise_0.2": {"recall": 0.261312, "ndcg": 0.238575, "removed_ratio": 0.04, "noisy_removal_rate": 0.0788, "removed_precision_noisy": 0.3941}
+    },
+    "ml-1m": {
+      "norm_only_clean": {"recall": 0.272258, "ndcg": 0.254619},
+      "norm_only_noise_0.2": {"recall": 0.210394, "ndcg": 0.185835},
+      "full_clean": {"recall": 0.270421, "ndcg": 0.254019, "removed_ratio": 0.005},
+      "full_noise_0.2": {"recall": 0.211769, "ndcg": 0.186149, "removed_ratio": 0.005, "removed_precision_noisy": 0.4896}
+    }
+  },
+  "crossnorm_objective_compatibility_clean": [
+    {"dataset": "yelp2018", "objective": "au", "baseline_recall": 0.070526, "crossnorm_recall": 0.072650, "relative_gain_percent": 3.01, "status": "positive"},
+    {"dataset": "yelp2018", "objective": "corrected_ssm", "baseline_recall": 0.073039, "crossnorm_recall": 0.071890, "relative_gain_percent": -1.573, "status": "negative"},
+    {"dataset": "amazon-book", "objective": "ssm", "baseline_recall": 0.059870, "crossnorm_recall": 0.052695, "modulation_weight": 0.8, "relative_gain_percent": -11.98, "status": "negative"},
+    {"dataset": "amazon-book", "objective": "au", "baseline_recall": 0.056484, "crossnorm_recall": 0.055392, "modulation_weight": 0.2, "relative_gain_percent": -1.93, "status": "negative"},
+    {"dataset": "lastfm", "objective": "bpr", "baseline_recall": 0.293833, "crossnorm_recall": 0.312840, "modulation_weight": 0.2, "relative_gain_percent": 6.47, "status": "positive"},
+    {"dataset": "lastfm", "objective": "ssm", "baseline_recall": 0.252632, "crossnorm_recall": 0.285658, "modulation_weight": 0.2, "relative_gain_percent": 13.07, "status": "positive"},
+    {"dataset": "lastfm", "objective": "au", "baseline_recall": 0.211931, "crossnorm_recall": 0.220630, "modulation_weight": 0.2, "relative_gain_percent": 4.10, "status": "positive"},
+    {"dataset": "ml-1m", "objective": "bpr", "baseline_recall": 0.251381, "crossnorm_recall": 0.272352, "modulation_weight": 0.2, "relative_gain_percent": 8.34, "status": "positive"},
+    {"dataset": "ml-1m", "objective": "ssm", "baseline_recall": 0.221819, "crossnorm_recall": 0.258735, "modulation_weight": 0.2, "relative_gain_percent": 16.64, "status": "positive"},
+    {"dataset": "ml-1m", "objective": "au", "baseline_recall": 0.211679, "crossnorm_recall": 0.215553, "modulation_weight": 1.0, "relative_gain_percent": 1.83, "status": "positive"}
+  ],
+  "objective_hyperparameters": {
+    "yelp2018_ssm_robust_search": {"learning_rate": 0.0001, "temperature": 0.14, "decay": 0.0001},
+    "lastfm_ssm": {"learning_rate": 0.0005, "temperature": 0.5, "decay": 0.001},
+    "ml-1m_ssm": {"learning_rate": 0.0005, "temperature": 0.1, "decay": 0.001},
+    "lastfm_au": {"learning_rate": 0.0005, "uniformity_weight": 0.1, "modulation_weight": 0.2},
+    "ml-1m_au": {"learning_rate": 0.0005, "uniformity_weight": 0.5, "modulation_weight": 1.0},
+    "amazon-book_ssm_pilot": {"learning_rate": 0.0005, "temperature": 0.1, "decay": 0.0001},
+    "amazon-book_au_pilot": {"learning_rate": 0.0005, "uniformity_weight": 5.0, "decay": 0.0001}
+  }
+}
