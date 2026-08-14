@@ -20,12 +20,12 @@
 
 ## 当前 dataset profile
 
-| Dataset | `mu` | `w_s` | Cap | Timing | LR | Decay |
-|:---|---:|---:|---:|:---|---:|---:|
-| Yelp2018 | 0.4 | 0.6 | uncapped consensus | adaptive 2--4 | 5e-4 | 1e-4 |
-| Amazon-Book | 0.4 | 0.6 | uncapped consensus | adaptive 2--4 | 5e-4 | 1e-4 |
-| LastFM | 0.2 | 0.95 | 4% | fixed 10 | 5e-4 | 1e-3 |
-| ML-1M | 0.2 | 0.95 | 0.5% | adaptive 5--10 | 5e-4 | 1e-3 |
+| Dataset | `mu` | `w_s` | Cap | Timing | LightGCN LR | Full LR | Decay |
+|:---|---:|---:|---:|:---|---:|---:|---:|
+| Yelp2018 | 0.4 | 0.6 | uncapped consensus | adaptive 2--4 | 1e-3 | 5e-4 | 1e-4 |
+| Amazon-Book | 0.4 | 0.6 | uncapped consensus | adaptive 2--4 | 1e-3 | 5e-4 | 1e-4 |
+| LastFM | 0.2 | 0.95 | 4% | fixed 10 | 1e-3 | 5e-4 | 1e-3 |
+| ML-1M | 0.2 | 0.95 | 0.5% | adaptive 5--10 | 1e-3 | 5e-4 | 1e-3 |
 
 共同：500 epochs 上限，test Recall@20 patience 20，seed 2026，normal std 0.01，batch 2048，uniform degree-preserving replacement noise。
 

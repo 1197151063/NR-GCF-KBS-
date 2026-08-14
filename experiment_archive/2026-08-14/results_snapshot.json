@@ -20,7 +20,8 @@
   },
   "selected_full_bpr_profiles": {
     "yelp2018": {
-      "learning_rate": 0.0005,
+      "lightgcn_learning_rate": 0.001,
+      "full_learning_rate": 0.0005,
       "decay": 0.0001,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
@@ -31,7 +32,8 @@
       "clean_exact_shared_combination_confirmed": false
     },
     "amazon-book": {
-      "learning_rate": 0.0005,
+      "lightgcn_learning_rate": 0.001,
+      "full_learning_rate": 0.0005,
       "decay": 0.0001,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
@@ -42,7 +44,8 @@
       "clean_exact_shared_combination_confirmed": true
     },
     "lastfm": {
-      "learning_rate": 0.0005,
+      "lightgcn_learning_rate": 0.001,
+      "full_learning_rate": 0.0005,
       "decay": 0.001,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,
@@ -51,7 +54,8 @@
       "filter_epoch": 10
     },
     "ml-1m": {
-      "learning_rate": 0.0005,
+      "lightgcn_learning_rate": 0.001,
+      "full_learning_rate": 0.0005,
       "decay": 0.001,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,

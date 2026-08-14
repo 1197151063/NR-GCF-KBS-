@@ -11,14 +11,14 @@
 
 ## 2. 当前完整模块配置
 
-共同配置：BPR，500 epochs 上限，patience 20，batch size 2048，normal initialization (`std=0.01`)，EMA decay 0.9，momentum quantile 0.8，structure quantile 0.2，MinHash two-hop structure，top-k 10，chunk size 8192。
+共同配置：BPR，500 epochs 上限，patience 20，batch size 2048，normal initialization (`std=0.01`)，EMA decay 0.9，momentum quantile 0.8，structure quantile 0.2，MinHash two-hop structure，top-k 10，chunk size 8192。由于普通 LightGCN 收敛明显更慢，无 CrossNorm arm 使用 `lr=1e-3`；带 CrossNorm arm 使用 `lr=5e-4`。
 
-| Dataset | LR | Decay | Norm weight $\mu$ | Structure weight $w_s$ | Removal cap | Filter timing |
-|:---|---:|---:|---:|---:|---:|:---|
-| Yelp2018 | 5e-4 | 1e-4 | 0.4 | 0.6 | uncapped consensus budget | adaptive epoch 2--4, stable checks 1 |
-| Amazon-Book | 5e-4 | 1e-4 | 0.4 | 0.6 | uncapped consensus budget | adaptive epoch 2--4, stable checks 1 |
-| LastFM | 5e-4 | 1e-3 | 0.2 | 0.95 | 4% | fixed epoch 10 |
-| ML-1M | 5e-4 | 1e-3 | 0.2 | 0.95 | 0.5% | adaptive epoch 5--10, stable checks 2 |
+| Dataset | LightGCN LR | Full LR | Decay | Norm weight $\mu$ | Structure weight $w_s$ | Removal cap | Filter timing |
+|:---|---:|---:|---:|---:|---:|:---|:---|
+| Yelp2018 | 1e-3 | 5e-4 | 1e-4 | 0.4 | 0.6 | uncapped consensus budget | adaptive epoch 2--4, stable checks 1 |
+| Amazon-Book | 1e-3 | 5e-4 | 1e-4 | 0.4 | 0.6 | uncapped consensus budget | adaptive epoch 2--4, stable checks 1 |
+| LastFM | 1e-3 | 5e-4 | 1e-3 | 0.2 | 0.95 | 4% | fixed epoch 10 |
+| ML-1M | 1e-3 | 5e-4 | 1e-3 | 0.2 | 0.95 | 0.5% | adaptive epoch 5--10, stable checks 2 |
 
 `removal cap=1.0` 的真实语义是“不额外截断 consensus-derived budget”，不是删除全部边。
 

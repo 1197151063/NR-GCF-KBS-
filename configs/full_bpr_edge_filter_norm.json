@@ -1,5 +1,5 @@
 {
-  "schema_version": "nrgcf_full_bpr_profile_v1",
+  "schema_version": "nrgcf_full_bpr_profile_v2",
   "objective": "bpr",
   "noise_protocol": "degree_preserving_replace_uniform",
   "selection_scope": "one shared profile per dataset for clean and noisy runs",
@@ -9,6 +9,7 @@
     "train_batch_size": 2048,
     "train_init_method": "normal",
     "train_init_weight": 0.01,
+    "non_crossnorm_train_lr": 0.001,
     "momentum_quantile": 0.8,
     "structure_quantile": 0.2,
     "momentum_decay": 0.9,
@@ -20,7 +21,7 @@
   },
   "datasets": {
     "yelp2018": {
-      "train_lr": 0.0005,
+      "crossnorm_train_lr": 0.0005,
       "train_decay": 0.0001,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
@@ -34,7 +35,7 @@
       "evidence": "Yelp fusion and modulation sensitivity; mu=0.4 is the noisy optimum and w_s=0.6 is the noisy optimum while remaining near the clean optimum."
     },
     "amazon-book": {
-      "train_lr": 0.0005,
+      "crossnorm_train_lr": 0.0005,
       "train_decay": 0.0001,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
@@ -48,7 +49,7 @@
       "evidence": "Amazon-Book fusion and modulation sensitivity selected mu=0.4 and w_s=0.6 on both clean and 0.2 replacement noise."
     },
     "lastfm": {
-      "train_lr": 0.0005,
+      "crossnorm_train_lr": 0.0005,
       "train_decay": 0.001,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,
@@ -62,7 +63,7 @@
       "evidence": "Common clean/noisy CrossNorm selection chose mu=0.2; fixed-time ranking confirmation favored w_s=0.95 with a 4% cap at noise 0.2."
     },
     "ml-1m": {
-      "train_lr": 0.0005,
+      "crossnorm_train_lr": 0.0005,
       "train_decay": 0.001,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,
@@ -86,6 +87,7 @@
     "These profiles were selected from single-seed exploratory experiments using test Recall@20.",
     "The full edge-filter plus CrossNorm comparison is currently implemented only for BPR because per-edge filtering dynamics are defined by instance-wise BPR loss.",
     "SSM and AU objective-generalization experiments remain no-filter CrossNorm studies and must not be presented as full edge-filter results.",
-    "A max_removal_ratio of 1.0 means the consensus-derived budget is uncapped, not that all edges are removed."
+    "A max_removal_ratio of 1.0 means the consensus-derived budget is uncapped, not that all edges are removed.",
+    "Learning rates are arm-specific: variants without CrossNorm use 1e-3, while variants with CrossNorm use 5e-4."
   ]
 }

@@ -132,9 +132,12 @@ run_case() {
   local filter_mode="none"
   local modulation_mode="none"
   local modulation_weight="0"
+  local train_lr
+  train_lr="$(profile_value "$dataset" non_crossnorm_train_lr)"
   if [[ "$arm" == "norm_only" || "$arm" == "full" ]]; then
     modulation_mode="blend_always"
     modulation_weight="$(profile_value "$dataset" modulation_weight)"
+    train_lr="$(profile_value "$dataset" crossnorm_train_lr)"
   fi
   if [[ "$arm" == "filter_only" || "$arm" == "full" ]]; then
     filter_mode="hard_structure_momentum"
@@ -147,7 +150,7 @@ run_case() {
     structural_mode="$(profile_value "$dataset" structural_mode)"
   fi
 
-  echo "Start dataset=$dataset arm=$arm noise=$ratio seed=$seed"
+  echo "Start dataset=$dataset arm=$arm noise=$ratio seed=$seed lr=$train_lr"
   DATASET="$dataset" \
   NOISE_MODE=degree_preserving_replace \
   REPLACEMENT_SELECTION=uniform \
@@ -158,7 +161,7 @@ run_case() {
   TRAIN_EPOCHS="${TRAIN_EPOCHS:-$(profile_value "$dataset" train_epochs)}" \
   TRAIN_PATIENCE="${TRAIN_PATIENCE:-$(profile_value "$dataset" train_patience)}" \
   TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-$(profile_value "$dataset" train_batch_size)}" \
-  TRAIN_LR="$(profile_value "$dataset" train_lr)" \
+  TRAIN_LR="$train_lr" \
   TRAIN_INIT_METHOD="$(profile_value "$dataset" train_init_method)" \
   TRAIN_INIT_WEIGHT="$(profile_value "$dataset" train_init_weight)" \
   TRAIN_DECAY="$(profile_value "$dataset" train_decay)" \
@@ -213,7 +216,7 @@ echo "  planned runs: $total"
 echo "  output:       $output_root"
 
 for dataset in "${dataset_values[@]}"; do
-  echo "Dataset profile $dataset: mu=$(profile_value "$dataset" modulation_weight), structure_weight=$(profile_value "$dataset" structure_weight), cap=$(profile_value "$dataset" max_removal_ratio), schedule=$(profile_value "$dataset" filter_schedule)"
+  echo "Dataset profile $dataset: LightGCN lr=$(profile_value "$dataset" non_crossnorm_train_lr), CrossNorm lr=$(profile_value "$dataset" crossnorm_train_lr), mu=$(profile_value "$dataset" modulation_weight), structure_weight=$(profile_value "$dataset" structure_weight), cap=$(profile_value "$dataset" max_removal_ratio), schedule=$(profile_value "$dataset" filter_schedule)"
   for arm in "${arm_values[@]}"; do
     for ratio in "${ratio_values[@]}"; do
       for seed in "${seed_values[@]}"; do
