@@ -27,7 +27,7 @@ git rev-parse --short HEAD
 conda activate cyj
 cd /root/cyj/NR-GCF-KBS-/code
 
-OUT=/root/autodl-tmp/outputs/outputs_v5.2_bpr_full_noise_curve
+OUT=/root/autodl-tmp/outputs/outputs_v5.3_bpr_full_noise_curve_lr_split
 mkdir -p "$OUT"
 
 nohup env \
@@ -45,7 +45,7 @@ nohup env \
 查看进度：
 
 ```bash
-tail -f /root/autodl-tmp/outputs/outputs_v5.2_bpr_full_noise_curve/run.log
+tail -f /root/autodl-tmp/outputs/outputs_v5.3_bpr_full_noise_curve_lr_split/run.log
 ```
 
 默认共 48 runs：四个数据集 × 六个 noise ratio × LightGCN/Full 两个方法。每个 case 使用独立目录；已完成 case 有 `comparison_summary.json` 时会跳过。若某个 case 中断，先只移动该 case 目录，再重新执行相同命令。脚本默认 `SUMMARY_ONLY=1`，不保留 per-edge CSV 和临时 generated train。

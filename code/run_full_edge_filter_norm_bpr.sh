@@ -15,7 +15,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 profile_file="${PROFILE_FILE:-$script_dir/../configs/full_bpr_edge_filter_norm.json}"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v5.2_bpr_full_noise_curve}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_v5.3_bpr_full_noise_curve_lr_split}"
 datasets="${DATASETS:-yelp2018 amazon-book lastfm ml-1m}"
 noise_ratios="${NOISE_RATIOS:-0 0.1 0.2 0.3 0.4 0.5}"
 seeds="${SEEDS:-2026}"
