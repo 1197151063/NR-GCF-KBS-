@@ -12,7 +12,7 @@
 
 ### Stable training dynamics
 
-维护 detached per-edge objective-loss EMA：BPR 使用 instance BPR loss；SSM 使用当前优化 forward 已计算的 in-batch instance SSM loss。SSM 信号受 batch negative context 影响，因此必须在 metadata 中标注 batch-dependent，并通过 stable edge ID 进行 EMA：
+维护 detached per-edge objective-loss EMA：BPR 使用 instance BPR loss；SSM 使用当前优化 forward 已计算的 in-batch instance SSM loss；AU 使用归一化 user--item embedding 的逐边 alignment squared distance，batch-level uniformity 因无法唯一归因到边而排除。SSM 信号受 batch negative context 影响，因此必须在 metadata 中标注 batch-dependent，所有信号均通过 stable edge ID 进行 EMA：
 
 `m_e(t) = 0.9*m_e(t-1) + 0.1*l_e(t)`。
 

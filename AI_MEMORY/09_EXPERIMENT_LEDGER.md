@@ -15,7 +15,7 @@
 - 主方法是 structure--momentum hard edge filtering + epoch-1 always-on blended CrossNorm。
 - Filter risk 以 bilateral two-hop structural inconsistency 为主、EMA objective loss 为补充；BPR 使用 instance BPR loss，SSM 使用 batch-dependent in-batch instance loss。删除预算由高-loss/低-structure consensus 得出，再应用 dataset-specific cap。
 - CrossNorm 是 propagation operator，不是 filtering 后才启动的第二阶段模块。
-- Full filtering 已支持 BPR 与 SSM；SSM 的四数据集全噪声曲线尚未返回，在结果验证前不得写成已证明的 full-method objective generalization。AU 仍只支持无过滤 CrossNorm。
+- Full filtering 已支持 BPR、SSM 与 AU。SSM 的 48-case 曲线已返回：19/24 case 提升，但 Yelp/Amazon clean/low-noise 为负，LastFM/ML-1M 的大部分收益可能由 CrossNorm 主导，必须补 Norm-only/Filter-only 归因。AU 的完整接口已实现，48-case 结果尚未返回。
 - 不使用 degree/connectivity protection；但图会在删边后正确重建，sampler 与 propagation graph 保持一致。
 
 ## 当前 dataset profile

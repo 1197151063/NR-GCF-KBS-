@@ -149,18 +149,30 @@ class RecModel(MessagePassing):
             + self.uniformity(item_emb, t=self.config['au_uniformity_t'])
         )
 
-    def au_loss(self, edge_label_index:LongTensor):
+    def au_loss(self, edge_label_index:LongTensor, return_aux=False):
         user_all, item_all = self.forward(edge_index=self.edge_index)
         user_emb = user_all[edge_label_index[0]]
         item_emb = item_all[edge_label_index[1]]
         user_normalized = F.normalize(user_emb, dim=-1)
         item_normalized = F.normalize(item_emb, dim=-1)
-        alignment = (user_normalized - item_normalized).pow(2).sum(dim=-1).mean()
+        instance_alignment = (
+            user_normalized - item_normalized
+        ).pow(2).sum(dim=-1)
+        alignment = instance_alignment.mean()
         uniformity = (
             self.uniformity(user_emb, t=self.config['au_uniformity_t'])
             + self.uniformity(item_emb, t=self.config['au_uniformity_t'])
         )
-        return alignment + self.config['au_uniformity_weight'] * uniformity
+        total = alignment + self.config['au_uniformity_weight'] * uniformity
+        if return_aux:
+            return total, {
+                'instance_loss': instance_alignment.detach(),
+                'instance_loss_semantics': (
+                    'per_interaction_normalized_alignment_squared_distance; '
+                    'batch_uniformity_excluded'
+                ),
+            }
+        return total
     
     def message(self, x_j: Tensor) -> Tensor:
         return x_j
@@ -382,6 +394,12 @@ class NRGCF(RecModel):
                 ),
                 'uniformity_t': float(self.config['au_uniformity_t']),
                 'uniformity_sides': 'user_plus_item',
+                'reliability_instance_signal': (
+                    'per_interaction_normalized_alignment_squared_distance'
+                ),
+                'reliability_excluded_term': (
+                    'batch_uniformity_has_no_unique_per-edge attribution'
+                ),
                 'regularization': 'none',
                 'message_dropout': self.objective_message_dropout,
                 'embedding_initialization': initialization,
@@ -836,8 +854,7 @@ class NRGCF(RecModel):
         if objective == 'ssm':
             return self.ssm_loss(edge_label_index, return_aux=return_aux)
         if objective == 'au':
-            loss = self.au_loss(edge_label_index)
-            return (loss, None) if return_aux else loss
+            return self.au_loss(edge_label_index, return_aux=return_aux)
         if objective == 'adap_tau':
             return self.adap_tau_loss(
                 edge_label_index, return_aux=return_aux

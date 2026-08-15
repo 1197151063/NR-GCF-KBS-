@@ -234,9 +234,13 @@ if [[ "$training_objective" == "ssm" && "$edge_filter_mode" != "none" && \
   echo "SSM filtering supports only EDGE_FILTER_MODE=hard_structure_momentum." >&2
   exit 2
 fi
-if [[ "$training_objective" != "bpr" && "$training_objective" != "ssm" && \
-      "$edge_filter_mode" != "none" ]]; then
-  echo "AU/Adap-tau objective pilots require EDGE_FILTER_MODE=none." >&2
+if [[ "$training_objective" == "au" && "$edge_filter_mode" != "none" && \
+      "$edge_filter_mode" != "hard_structure_momentum" ]]; then
+  echo "AU filtering supports only EDGE_FILTER_MODE=hard_structure_momentum." >&2
+  exit 2
+fi
+if [[ "$training_objective" == "adap_tau" && "$edge_filter_mode" != "none" ]]; then
+  echo "Adap-tau objective pilots require EDGE_FILTER_MODE=none." >&2
   exit 2
 fi
 if [[ "$train_init_method" != "auto" && \

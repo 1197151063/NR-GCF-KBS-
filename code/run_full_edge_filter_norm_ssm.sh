@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Full corrected in-batch SSM robustness curve. The default 48 cases compare
-# ordinary LightGCN-SSM against SSM + structure/momentum filtering + CrossNorm.
+# Full objective robustness curve for SSM or AU. The default profile remains
+# corrected in-batch SSM; the AU wrapper supplies its own objective profile.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 profile_file="${PROFILE_FILE:-$script_dir/../configs/full_ssm_edge_filter_norm.json}"
@@ -26,6 +26,18 @@ if [[ ! -f "$profile_file" ]]; then
   echo "Missing profile file: $profile_file" >&2
   exit 2
 fi
+training_objective="$(python3 - "$profile_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream).get("objective", ""))
+PY
+)"
+if [[ "$training_objective" != "ssm" && "$training_objective" != "au" ]]; then
+  echo "Profile objective must be ssm or au." >&2
+  exit 2
+fi
+objective_label="$(printf '%s' "$training_objective" | tr '[:lower:]' '[:upper:]')"
 if ! [[ "$gpu_id" =~ ^[0-9]+$ ]]; then
   echo "GPU_ID must be a non-negative integer." >&2
   exit 2
@@ -44,8 +56,8 @@ import sys
 profile_path, datasets_text, ratios_text, seeds_text, arms_text = sys.argv[1:]
 with open(profile_path, encoding="utf-8") as stream:
     profile = json.load(stream)
-if profile.get("objective") != "ssm":
-    raise SystemExit("The selected profile is not an SSM profile")
+if profile.get("objective") not in {"ssm", "au"}:
+    raise SystemExit("The selected profile is not an SSM/AU profile")
 datasets = datasets_text.split()
 unknown = sorted(set(datasets) - set(profile["datasets"]))
 if unknown:
@@ -133,7 +145,20 @@ run_case() {
     structural_mode="$(profile_value "$dataset" structural_mode)"
   fi
 
-  echo "Start dataset=$dataset arm=$arm noise=$ratio seed=$seed lr=$train_lr tau=$(profile_value "$dataset" ssm_tau)"
+  local ssm_tau="0.1"
+  local au_uniformity_weight="1.0"
+  local au_uniformity_t="2.0"
+  local objective_detail
+  if [[ "$training_objective" == "ssm" ]]; then
+    ssm_tau="$(profile_value "$dataset" ssm_tau)"
+    objective_detail="tau=$ssm_tau"
+  else
+    au_uniformity_weight="$(profile_value "$dataset" au_uniformity_weight)"
+    au_uniformity_t="$(profile_value "$dataset" au_uniformity_t)"
+    objective_detail="uniformity_weight=$au_uniformity_weight uniformity_t=$au_uniformity_t"
+  fi
+
+  echo "Start dataset=$dataset objective=$training_objective arm=$arm noise=$ratio seed=$seed lr=$train_lr $objective_detail"
   DATASET="$dataset" \
   NOISE_MODE=degree_preserving_replace \
   REPLACEMENT_SELECTION=uniform \
@@ -148,8 +173,10 @@ run_case() {
   TRAIN_INIT_METHOD="$(profile_value "$dataset" train_init_method)" \
   TRAIN_INIT_WEIGHT="$(profile_value "$dataset" train_init_weight)" \
   TRAIN_DECAY="$(profile_value "$dataset" train_decay)" \
-  TRAINING_OBJECTIVE=ssm \
-  SSM_TAU="$(profile_value "$dataset" ssm_tau)" \
+  TRAINING_OBJECTIVE="$training_objective" \
+  SSM_TAU="$ssm_tau" \
+  AU_UNIFORMITY_WEIGHT="$au_uniformity_weight" \
+  AU_UNIFORMITY_T="$au_uniformity_t" \
   OBJECTIVE_MESSAGE_DROPOUT="$(profile_value "$dataset" objective_message_dropout)" \
   STOP_AFTER_FILTER=0 \
   SUMMARY_ONLY=1 \
@@ -190,7 +217,7 @@ run_case() {
 }
 
 total=$((${#dataset_values[@]} * ${#arm_values[@]} * ${#ratio_values[@]} * ${#seed_values[@]}))
-echo "SSM LightGCN vs full edge-filter + CrossNorm experiment"
+echo "$objective_label LightGCN vs full edge-filter + CrossNorm experiment"
 echo "  profile:      $profile_file"
 echo "  datasets:     $datasets"
 echo "  arms:         $arms"
@@ -200,7 +227,13 @@ echo "  GPU:          $gpu_id"
 echo "  planned runs: $total"
 echo "  output:       $output_root"
 for dataset in "${dataset_values[@]}"; do
-  echo "Dataset profile $dataset: LightGCN lr=$(profile_value "$dataset" non_crossnorm_train_lr), Full lr=$(profile_value "$dataset" crossnorm_train_lr), tau=$(profile_value "$dataset" ssm_tau), decay=$(profile_value "$dataset" train_decay), mu=$(profile_value "$dataset" modulation_weight), structure_weight=$(profile_value "$dataset" structure_weight), cap=$(profile_value "$dataset" max_removal_ratio), schedule=$(profile_value "$dataset" filter_schedule)"
+  objective_profile=""
+  if [[ "$training_objective" == "ssm" ]]; then
+    objective_profile="tau=$(profile_value "$dataset" ssm_tau)"
+  else
+    objective_profile="uniformity_weight=$(profile_value "$dataset" au_uniformity_weight), uniformity_t=$(profile_value "$dataset" au_uniformity_t)"
+  fi
+  echo "Dataset profile $dataset: LightGCN lr=$(profile_value "$dataset" non_crossnorm_train_lr), Full lr=$(profile_value "$dataset" crossnorm_train_lr), $objective_profile, decay=$(profile_value "$dataset" train_decay), mu=$(profile_value "$dataset" modulation_weight), structure_weight=$(profile_value "$dataset" structure_weight), cap=$(profile_value "$dataset" max_removal_ratio), schedule=$(profile_value "$dataset" filter_schedule)"
   for arm in "${arm_values[@]}"; do
     for ratio in "${ratio_values[@]}"; do
       for seed in "${seed_values[@]}"; do
@@ -227,7 +260,7 @@ python3 "$script_dir/analyze_full_edge_filter_norm.py" \
   --output "$output_root/full_edge_filter_norm_summary.json" \
   --markdown "$output_root/full_edge_filter_norm_summary.md"
 
-echo "Full SSM experiment completed: $output_root"
+echo "Full $objective_label experiment completed: $output_root"
 echo "  table: $output_root/full_edge_filter_norm_summary.md"
 echo "  JSON:  $output_root/full_edge_filter_norm_summary.json"
 echo "  runs:  $output_root/all_runs.json"

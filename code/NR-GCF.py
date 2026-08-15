@@ -150,7 +150,7 @@ def train(dataset:Loader,
             adap_tau_observation_count.index_add_(
                 0, users, torch.ones_like(unit_loss)
             )
-        elif needs_stable_loss and objective == 'ssm':
+        elif needs_stable_loss and objective in ('ssm', 'au'):
             # Reuse the detached per-interaction SSM losses from the exact
             # optimization forward pass.  This adds no second forward pass
             # and preserves the objective's existing RNG sequence.
@@ -160,10 +160,10 @@ def train(dataset:Loader,
         else:
             loss = model.get_loss(edge_label_index)
         if needs_legacy_loss or needs_stable_loss:
-            if objective == 'ssm':
+            if objective in ('ssm', 'au'):
                 if objective_aux is None or 'instance_loss' not in objective_aux:
                     raise RuntimeError(
-                        'SSM reliability filtering requires detached '
+                        f'{objective.upper()} reliability filtering requires detached '
                         'per-interaction objective losses.'
                     )
                 instance_loss = objective_aux['instance_loss']
@@ -239,11 +239,18 @@ if (world.training_objective == 'ssm'
         'SSM reliability integration currently supports only '
         '--edge-filter-mode hard_structure_momentum.'
     )
-if (world.training_objective in ('au', 'adap_tau')
+if (world.training_objective == 'au'
+        and world.args.edge_filter_mode not in (
+            'none', 'hard_structure_momentum')):
+    raise ValueError(
+        'AU reliability integration currently supports only '
+        '--edge-filter-mode hard_structure_momentum.'
+    )
+if (world.training_objective == 'adap_tau'
         and world.args.edge_filter_mode != 'none'):
     raise ValueError(
-        'AU/Adap-tau objective pilots require --edge-filter-mode none. '
-        'Their per-edge reliability signals have not been defined.'
+        'Adap-tau objective pilots require --edge-filter-mode none. '
+        'Its per-edge reliability signal has not been defined.'
     )
 if (world.args.export_edge_diagnostics
         and world.args.edge_filter_mode != 'current'):
@@ -393,6 +400,12 @@ def stable_momentum_semantics():
             + str(model.config['tau'])
             + '_decay_' + decay
             + '_batch_dependent_negative_context'
+        )
+    if objective == 'au':
+        return (
+            'per_edge_ema_au_normalized_alignment_squared_distance_decay_'
+            + decay
+            + '_batch_uniformity_excluded'
         )
     return 'per_edge_ema_instance_bpr_loss_decay_' + decay
 

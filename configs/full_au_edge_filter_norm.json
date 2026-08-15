@@ -1,0 +1,95 @@
+{
+  "schema_version": "nrgcf_full_au_profile_v1",
+  "objective": "au",
+  "noise_protocol": "degree_preserving_replace_uniform",
+  "selection_scope": "one shared profile per dataset for clean and noisy runs",
+  "common": {
+    "train_epochs": 500,
+    "train_patience": 20,
+    "train_batch_size": 2048,
+    "train_init_method": "xavier_uniform",
+    "train_init_weight": 1.0,
+    "non_crossnorm_train_lr": 0.001,
+    "au_uniformity_t": 2.0,
+    "objective_message_dropout": 0.0,
+    "momentum_quantile": 0.8,
+    "structure_quantile": 0.2,
+    "momentum_decay": 0.9,
+    "structural_mode": "two_hop_minhash",
+    "structural_topk": 10,
+    "chunk_size": 8192,
+    "adaptive_min_coverage": 0.99,
+    "adaptive_jaccard": 0.9
+  },
+  "datasets": {
+    "yelp2018": {
+      "crossnorm_train_lr": 0.0005,
+      "train_decay": 0.0001,
+      "au_uniformity_weight": 1.0,
+      "modulation_weight": 1.0,
+      "structure_weight": 0.6,
+      "max_removal_ratio": 1.0,
+      "filter_schedule": "adaptive",
+      "filter_epoch": 3,
+      "adaptive_min_epoch": 2,
+      "adaptive_max_epoch": 4,
+      "adaptive_stable_checks": 1,
+      "evidence": "AU weight 1 and direct always-on CrossNorm (blend mu=1) follow the positive Yelp clean objective pilot; filtering uses the selected shared profile."
+    },
+    "amazon-book": {
+      "crossnorm_train_lr": 0.0005,
+      "train_decay": 0.0001,
+      "au_uniformity_weight": 5.0,
+      "modulation_weight": 0.2,
+      "structure_weight": 0.6,
+      "max_removal_ratio": 1.0,
+      "filter_schedule": "adaptive",
+      "filter_epoch": 3,
+      "adaptive_min_epoch": 2,
+      "adaptive_max_epoch": 4,
+      "adaptive_stable_checks": 1,
+      "evidence": "AU weight 5 and the best observed nonzero CrossNorm weight follow the Amazon objective pilot; filtering uses the selected shared profile."
+    },
+    "lastfm": {
+      "crossnorm_train_lr": 0.0005,
+      "train_decay": 0.001,
+      "au_uniformity_weight": 0.1,
+      "modulation_weight": 0.2,
+      "structure_weight": 0.95,
+      "max_removal_ratio": 0.04,
+      "filter_schedule": "fixed",
+      "filter_epoch": 10,
+      "adaptive_min_epoch": 5,
+      "adaptive_max_epoch": 10,
+      "adaptive_stable_checks": 2,
+      "evidence": "AU weight 0.1 and CrossNorm mu=0.2 follow the completed LastFM AU sensitivity; filtering uses the selected 4% profile."
+    },
+    "ml-1m": {
+      "crossnorm_train_lr": 0.0005,
+      "train_decay": 0.001,
+      "au_uniformity_weight": 0.5,
+      "modulation_weight": 1.0,
+      "structure_weight": 0.95,
+      "max_removal_ratio": 0.005,
+      "filter_schedule": "adaptive",
+      "filter_epoch": 10,
+      "adaptive_min_epoch": 5,
+      "adaptive_max_epoch": 10,
+      "adaptive_stable_checks": 2,
+      "evidence": "AU weight 0.5 and CrossNorm mu=1 follow the completed ML-1M AU sensitivity; filtering uses the selected 0.5% profile."
+    }
+  },
+  "arms": {
+    "lightgcn": "AU with no edge filtering and no CrossNorm",
+    "norm_only": "AU with CrossNorm blend only",
+    "filter_only": "AU with structure-momentum hard filtering only",
+    "full": "AU with structure-momentum hard filtering plus CrossNorm blend"
+  },
+  "notes": [
+    "AU momentum is the EMA of detached per-interaction normalized alignment squared distance from the exact optimization forward pass.",
+    "The batch-level user/item uniformity term is excluded because it has no unique per-edge attribution.",
+    "The configured train_decay is recorded for matched provenance but AU has no explicit L2 regularization term.",
+    "Filter and CrossNorm parameters are shared across noise ratios and are not selected using synthetic labels.",
+    "Learning rates are arm-specific: no-CrossNorm variants use 1e-3 and CrossNorm variants use 5e-4."
+  ]
+}
