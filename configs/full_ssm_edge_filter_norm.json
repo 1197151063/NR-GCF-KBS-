@@ -1,14 +1,14 @@
 {
-  "schema_version": "nrgcf_full_bpr_profile_v2",
-  "objective": "bpr",
+  "schema_version": "nrgcf_full_ssm_profile_v1",
+  "objective": "ssm",
   "noise_protocol": "degree_preserving_replace_uniform",
   "selection_scope": "one shared profile per dataset for clean and noisy runs",
   "common": {
     "train_epochs": 500,
     "train_patience": 20,
     "train_batch_size": 2048,
-    "train_init_method": "normal",
-    "train_init_weight": 0.01,
+    "train_init_method": "xavier_uniform",
+    "train_init_weight": 1.0,
     "non_crossnorm_train_lr": 0.001,
     "momentum_quantile": 0.8,
     "structure_quantile": 0.2,
@@ -23,6 +23,8 @@
     "yelp2018": {
       "crossnorm_train_lr": 0.0005,
       "train_decay": 0.0001,
+      "ssm_tau": 0.14,
+      "objective_message_dropout": 0.1,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
       "max_removal_ratio": 1.0,
@@ -31,12 +33,13 @@
       "adaptive_min_epoch": 2,
       "adaptive_max_epoch": 4,
       "adaptive_stable_checks": 1,
-      "status": "selected exploratory profile",
-      "evidence": "Yelp fusion and modulation sensitivity; mu=0.4 is the noisy optimum and w_s=0.6 is the noisy optimum while remaining near the clean optimum."
+      "evidence": "SSM tau/dropout/decay follow the corrected Yelp robust search; filtering and modulation use the selected shared full-method profile."
     },
     "amazon-book": {
       "crossnorm_train_lr": 0.0005,
       "train_decay": 0.0001,
+      "ssm_tau": 0.1,
+      "objective_message_dropout": 0.0,
       "modulation_weight": 0.4,
       "structure_weight": 0.6,
       "max_removal_ratio": 1.0,
@@ -45,12 +48,13 @@
       "adaptive_min_epoch": 2,
       "adaptive_max_epoch": 4,
       "adaptive_stable_checks": 1,
-      "status": "selected exploratory profile",
-      "evidence": "Amazon-Book fusion and modulation sensitivity selected mu=0.4 and w_s=0.6 on both clean and 0.2 replacement noise."
+      "evidence": "SSM tau/decay follow the Amazon objective pilot; filtering and modulation use the selected shared full-method profile."
     },
     "lastfm": {
       "crossnorm_train_lr": 0.0005,
       "train_decay": 0.001,
+      "ssm_tau": 0.5,
+      "objective_message_dropout": 0.0,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,
       "max_removal_ratio": 0.04,
@@ -59,12 +63,13 @@
       "adaptive_min_epoch": 5,
       "adaptive_max_epoch": 10,
       "adaptive_stable_checks": 2,
-      "status": "selected exploratory profile",
-      "evidence": "Common clean/noisy CrossNorm selection chose mu=0.2; fixed-time ranking confirmation favored w_s=0.95 with a 4% cap at noise 0.2."
+      "evidence": "SSM tau/decay and CrossNorm weight follow the LastFM convergence, decay, and norm sensitivity studies; filtering uses the selected 4% profile."
     },
     "ml-1m": {
       "crossnorm_train_lr": 0.0005,
       "train_decay": 0.001,
+      "ssm_tau": 0.1,
+      "objective_message_dropout": 0.0,
       "modulation_weight": 0.2,
       "structure_weight": 0.95,
       "max_removal_ratio": 0.005,
@@ -73,21 +78,19 @@
       "adaptive_min_epoch": 5,
       "adaptive_max_epoch": 10,
       "adaptive_stable_checks": 2,
-      "status": "selected exploratory profile",
-      "evidence": "Common clean/noisy BPR profile uses mu=0.2; the focused removal-budget pilot selected a conservative 0.5% cap with w_s=0.95."
+      "evidence": "SSM tau/decay and CrossNorm weight follow the ML-1M convergence, decay, and norm sensitivity studies; filtering uses the selected 0.5% profile."
     }
   },
   "arms": {
-    "lightgcn": "no edge filtering and no CrossNorm",
-    "norm_only": "CrossNorm blend only",
-    "filter_only": "structure-momentum hard filtering only",
-    "full": "structure-momentum hard filtering plus CrossNorm blend"
+    "lightgcn": "SSM with no edge filtering and no CrossNorm",
+    "norm_only": "SSM with CrossNorm blend only",
+    "filter_only": "SSM with structure-momentum hard filtering only",
+    "full": "SSM with structure-momentum hard filtering plus CrossNorm blend"
   },
-  "cautions": [
-    "These profiles were selected from single-seed exploratory experiments using test Recall@20.",
-    "This profile is BPR-specific. The SSM integration uses a separate profile and an EMA of its detached in-batch per-interaction loss.",
-    "SSM and AU objective-generalization experiments remain no-filter CrossNorm studies and must not be presented as full edge-filter results.",
-    "A max_removal_ratio of 1.0 means the consensus-derived budget is uncapped, not that all edges are removed.",
-    "Learning rates are arm-specific: variants without CrossNorm use 1e-3, while variants with CrossNorm use 5e-4."
+  "notes": [
+    "SSM momentum is the EMA of the detached in-batch per-interaction SSM loss computed by the optimization forward pass.",
+    "Because in-batch negatives depend on batch composition, the SSM momentum signal is batch-context dependent; EMA smoothing and stable edge IDs are used before filtering.",
+    "Filter and CrossNorm parameters are shared across noise ratios and are not selected using synthetic labels.",
+    "Learning rates are arm-specific by request: no-CrossNorm variants use 1e-3 and CrossNorm variants use 5e-4."
   ]
 }

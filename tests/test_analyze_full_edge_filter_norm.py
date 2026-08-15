@@ -33,12 +33,19 @@ class AnalyzeFullEdgeFilterNormTest(unittest.TestCase):
                     "noisy_removal_rate": 0.04 if removed is not None else None,
                     "clean_removal_rate": 0.01 if removed is not None else None,
                     "removed_precision_noisy": 0.4 if removed is not None else None,
+                    "best_post_filter_recall_at_20": (
+                        recall - 0.01 if removed is not None else None
+                    ),
+                    "best_post_filter_ndcg_at_20": (
+                        ndcg - 0.01 if removed is not None else None
+                    ),
+                    "best_post_filter_epoch": 8 if removed is not None else None,
                 }
             )
 
         result = analyze(
             {"root": "/tmp/results", "runs": runs},
-            {"schema_version": "profile-v1"},
+            {"schema_version": "profile-v1", "objective": "ssm"},
             ["yelp2018"],
             ["lightgcn", "norm_only", "filter_only", "full"],
             [0.2],
@@ -48,12 +55,35 @@ class AnalyzeFullEdgeFilterNormTest(unittest.TestCase):
         self.assertEqual(result["run_count"], 4)
         full = next(row for row in result["rows"] if row["arm"] == "full")
         self.assertAlmostEqual(
-            full["gains_over"]["lightgcn"]["recall_percent"], 30.0
+            full["gains_over"]["lightgcn"]["recall_percent"], 20.0
         )
         self.assertAlmostEqual(
             full["gains_over"]["norm_only"]["recall_percent"],
-            100.0 * (0.13 - 0.11) / 0.11,
+            100.0 * (0.12 - 0.11) / 0.11,
         )
+        self.assertEqual(result["protocol"]["objective"], "ssm")
+        self.assertEqual(full["selection_scope"], "post_filter")
+
+    def test_rejects_filtered_arm_without_post_filter_metrics(self):
+        with self.assertRaisesRegex(ValueError, "missing post-filter metrics"):
+            analyze(
+                {
+                    "runs": [{
+                        "run": "yelp2018/full/noise_0/seed_2026/run",
+                        "dataset": "yelp2018",
+                        "requested_noise_ratio": 0.0,
+                        "seed": 2026,
+                        "best_recall_at_20": 0.1,
+                        "best_ndcg_at_20": 0.08,
+                        "best_epoch": 1,
+                    }]
+                },
+                {"schema_version": "profile-v1", "objective": "ssm"},
+                ["yelp2018"],
+                ["full"],
+                [0.0],
+                [2026],
+            )
 
     def test_rejects_incomplete_grid(self):
         with self.assertRaisesRegex(ValueError, "grid mismatch"):

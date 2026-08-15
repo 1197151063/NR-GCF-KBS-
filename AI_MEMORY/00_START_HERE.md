@@ -24,7 +24,7 @@
 - 当前启动的是 BPR 主 noise curve：LightGCN 对比完整 Filter+Norm，四个数据集、六个 noise ratio，共 48 runs；四臂组成消融随后补充。
 - 当前 profile 位于 [`../configs/full_bpr_edge_filter_norm.json`](../configs/full_bpr_edge_filter_norm.json)，运行器为 [`../code/run_full_edge_filter_norm_bpr.sh`](../code/run_full_edge_filter_norm_bpr.sh)。
 - Yelp/Amazon 使用 `mu=0.4, w_s=0.6`；LastFM/ML-1M 使用 `mu=0.2, w_s=0.95`，删边 cap 分别为 4%/0.5%。
-- SSM/AU 仍是无过滤 CrossNorm compatibility；不是完整 Filter+Norm 结果。
+- SSM 已有完整 Filter+Norm 代码接口与 48-case 运行器，但实验结果尚未返回；AU 仍只是无过滤 CrossNorm compatibility。
 - 下方“当前最重要的状态”保留 2026-08-06 的历史演化上下文；若与 `09_EXPERIMENT_LEDGER.md` 冲突，以后者为准。
 
 ## 2026-08-06 历史快照（仅用于追溯）

@@ -47,7 +47,7 @@ class RepresentationModulationTest(unittest.TestCase):
                 best_ndcg=0.05,
                 final_loss=0.2,
                 propagation_edge_count=4,
-                bpr_positive_edge_count=4,
+                positive_training_edge_count=4,
                 representation_modulation_mode="blend_always",
                 representation_modulation_ramp_epochs=0,
                 representation_modulation_lambda=0.6,

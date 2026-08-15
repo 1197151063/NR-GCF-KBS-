@@ -70,9 +70,21 @@ def Fast_Sampling(dataset:Loader, sample_bpr_negative=True):
         # objectives do not perturb the original BPR path.
         order = np.arange(train_edge_index.size(1), dtype=np.int64)
         np.random.shuffle(order)
+        # SSM needs at least two interactions because every other positive in
+        # the batch acts as a negative.  If the final remainder is one, merge
+        # it into the preceding batch so every stable edge ID is still seen.
+        batch_slices = []
+        start = 0
+        while start < order.size:
+            remaining = order.size - start
+            take = batch_size + 1 if remaining == batch_size + 1 else min(
+                batch_size, remaining
+            )
+            batch_slices.append((start, start + take))
+            start += take
         train_loader = (
-            torch.from_numpy(order[start:start + batch_size]).long()
-            for start in range(0, order.size, batch_size)
+            torch.from_numpy(order[start:end]).long()
+            for start, end in batch_slices
         )
     for index in train_loader:
         pos_edge_label_index = train_edge_index[:,index]
@@ -108,11 +120,8 @@ def train(dataset:Loader,
         stable_edge_momentum is not None
         and epoch <= int(stable_filtering_epoch)
     )
-    sample_bpr_negative = (
-        model.config.get('training_objective') == 'bpr'
-        or needs_legacy_loss
-        or needs_stable_loss
-    )
+    objective = model.config.get('training_objective')
+    sample_bpr_negative = objective == 'bpr'
     model.prepare_objective_epoch(dataset.train_edge_index.to(device), epoch)
     edge_index,indexes = Fast_Sampling(
         dataset=dataset, sample_bpr_negative=sample_bpr_negative
@@ -128,6 +137,7 @@ def train(dataset:Loader,
         adap_tau_observation_count = torch.zeros_like(adap_tau_loss_sum)
     for edge_label_index,index in zip(edge_index,indexes):
         opt.zero_grad()
+        objective_aux = None
         if adap_tau_loss_sum is not None:
             loss, objective_aux = model.get_loss(
                 edge_label_index, return_aux=True
@@ -140,10 +150,25 @@ def train(dataset:Loader,
             adap_tau_observation_count.index_add_(
                 0, users, torch.ones_like(unit_loss)
             )
+        elif needs_stable_loss and objective == 'ssm':
+            # Reuse the detached per-interaction SSM losses from the exact
+            # optimization forward pass.  This adds no second forward pass
+            # and preserves the objective's existing RNG sequence.
+            loss, objective_aux = model.get_loss(
+                edge_label_index, return_aux=True
+            )
         else:
             loss = model.get_loss(edge_label_index)
         if needs_legacy_loss or needs_stable_loss:
-            instance_loss = model.get_instance_loss(edge_label_index)
+            if objective == 'ssm':
+                if objective_aux is None or 'instance_loss' not in objective_aux:
+                    raise RuntimeError(
+                        'SSM reliability filtering requires detached '
+                        'per-interaction objective losses.'
+                    )
+                instance_loss = objective_aux['instance_loss']
+            else:
+                instance_loss = model.get_instance_loss(edge_label_index)
             if needs_legacy_loss:
                 model.update_momentum(index, instance_loss,epoch)
             if edge_loss_history is not None and needs_legacy_loss:
@@ -207,12 +232,18 @@ if world.training_objective == 'au':
         raise ValueError('--au-uniformity-weight must be non-negative')
     if world.au_uniformity_t <= 0:
         raise ValueError('--au-uniformity-t must be positive')
-if (world.training_objective != 'bpr'
+if (world.training_objective == 'ssm'
+        and world.args.edge_filter_mode not in (
+            'none', 'hard_structure_momentum')):
+    raise ValueError(
+        'SSM reliability integration currently supports only '
+        '--edge-filter-mode hard_structure_momentum.'
+    )
+if (world.training_objective in ('au', 'adap_tau')
         and world.args.edge_filter_mode != 'none'):
     raise ValueError(
-        'SSM/AU/Adap-tau objective pilots require --edge-filter-mode none so the '
-        'ranking objective and graph filtering are not changed together. '
-        'Their integration with edge reliability must be evaluated separately.'
+        'AU/Adap-tau objective pilots require --edge-filter-mode none. '
+        'Their per-edge reliability signals have not been defined.'
     )
 if (world.args.export_edge_diagnostics
         and world.args.edge_filter_mode != 'current'):
@@ -352,6 +383,19 @@ representation_modulation_trace = []
 objective_training_trace = []
 stopped_early = False
 filtering_applied = False
+
+def stable_momentum_semantics():
+    objective = str(model.config.get('training_objective', 'bpr'))
+    decay = str(world.args.edge_reliability_momentum_decay)
+    if objective == 'ssm':
+        return (
+            'per_edge_ema_in_batch_ssm_instance_loss_tau_'
+            + str(model.config['tau'])
+            + '_decay_' + decay
+            + '_batch_dependent_negative_context'
+        )
+    return 'per_edge_ema_instance_bpr_loss_decay_' + decay
+
 # print(model.generate_weight(train_edge_index))
 for epoch in range(1, world.TRAIN_epochs + 1):
     start_time = time.time()
@@ -414,10 +458,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             max_removal_ratio=(
                 world.args.edge_reliability_max_removal_ratio
             ),
-            momentum_semantics=(
-                'per_edge_ema_instance_bpr_loss_decay_'
-                + str(world.args.edge_reliability_momentum_decay)
-            ),
+            momentum_semantics=stable_momentum_semantics(),
             momentum_observed_mask=momentum_observed_mask_for_filter,
             structural_features=cached_structural_features,
         )
@@ -625,10 +666,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
             )
             if policy_for_filter is not None:
                 raw_momentum = raw_momentum_for_filter
-                momentum_semantics = (
-                    'per_edge_ema_instance_bpr_loss_decay_'
-                    + str(world.args.edge_reliability_momentum_decay)
-                )
+                momentum_semantics = stable_momentum_semantics()
                 policy = policy_for_filter
             elif uses_stable_momentum:
                 raw_momentum = stable_edge_momentum.snapshot(
@@ -637,10 +675,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 momentum_observed_mask_for_filter = (
                     stable_edge_momentum.observed_mask()
                 )
-                momentum_semantics = (
-                    'per_edge_ema_instance_bpr_loss_decay_'
-                    + str(world.args.edge_reliability_momentum_decay)
-                )
+                momentum_semantics = stable_momentum_semantics()
             else:
                 raw_momentum = model.momentum_loss.detach().clone()
                 momentum_semantics = 'legacy_runtime_momentum'
@@ -742,8 +777,9 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                 train_edge_index = filtered_train_edge_index
                 print_log(
                     f'Stage-two {world.args.edge_filter_mode} applied: '
-                    f'{train_edge_index.size(1)} retained edges; ordinary BPR '
-                    'sampling and propagation use the same hard-filtered graph.'
+                    f'{train_edge_index.size(1)} retained edges; '
+                    f'{world.training_objective.upper()} positive sampling '
+                    'and propagation use the same hard-filtered graph.'
                 )
                 del retained_edge_mask
                 del filtered_train_edge_index
@@ -884,7 +920,7 @@ if (world.args.edge_filter_mode != 'current'
         best_ndcg=best_ndcg,
         final_loss=float(loss.detach().cpu().item()),
         propagation_edge_count=model.active_edge_count,
-        bpr_positive_edge_count=dataset.train_edge_index.size(1),
+        positive_training_edge_count=dataset.train_edge_index.size(1),
         representation_modulation_mode=(
             world.args.representation_modulation_mode
         ),

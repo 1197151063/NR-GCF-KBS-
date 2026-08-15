@@ -946,7 +946,7 @@ def write_reliability_summary(
 def write_training_summary(
         output_dir, mode, requested_epochs, epochs_completed, best_epoch,
         best_recall, best_ndcg, final_loss, propagation_edge_count,
-        bpr_positive_edge_count, representation_modulation_mode,
+        positive_training_edge_count, representation_modulation_mode,
         representation_modulation_ramp_epochs, representation_modulation_lambda,
         representation_modulation_trace, best_post_filter_epoch,
         best_post_filter_recall, best_post_filter_ndcg,
@@ -1010,9 +1010,12 @@ def write_training_summary(
         ),
         "final_training_loss": float(final_loss),
         "propagation_edge_count": int(propagation_edge_count),
-        "positive_training_edge_count": int(bpr_positive_edge_count),
+        "positive_training_edge_count": int(positive_training_edge_count),
         # Retained for schema compatibility with existing experiment bundles.
-        "bpr_positive_edge_count": int(bpr_positive_edge_count),
+        "bpr_positive_edge_count": (
+            int(positive_training_edge_count)
+            if training_objective.get("name") == "bpr" else None
+        ),
         "objective": training_objective["description"],
         "training_objective": training_objective,
         "objective_training_trace": objective_training_trace or [],

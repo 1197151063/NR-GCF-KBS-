@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize the four-arm BPR edge-filter/CrossNorm experiment."""
+"""Summarize a full edge-filter/CrossNorm objective experiment."""
 
 from __future__ import annotations
 
@@ -101,10 +101,8 @@ def analyze(
 
     rows_out: list[dict[str, Any]] = []
     lookup: dict[tuple[str, float, str], dict[str, Any]] = {}
+    filtered_arms = {"filter_only", "full"}
     metric_keys = (
-        "best_recall_at_20",
-        "best_ndcg_at_20",
-        "best_epoch",
         "removed_ratio",
         "noisy_removal_rate",
         "clean_removal_rate",
@@ -114,14 +112,46 @@ def analyze(
         for ratio in noise_ratios:
             for arm in arms:
                 case_rows = grouped[(dataset, ratio, arm)]
+                selection_keys = (
+                    (
+                        "best_post_filter_recall_at_20",
+                        "best_post_filter_ndcg_at_20",
+                        "best_post_filter_epoch",
+                    )
+                    if arm in filtered_arms else (
+                        "best_recall_at_20",
+                        "best_ndcg_at_20",
+                        "best_epoch",
+                    )
+                )
+                recall_key, ndcg_key, epoch_key = selection_keys
+                if arm in filtered_arms and any(
+                        row.get(recall_key) is None for row in case_rows):
+                    raise ValueError(
+                        "Filtered arm is missing post-filter metrics: "
+                        f"dataset={dataset!r}, noise={ratio}, arm={arm!r}"
+                    )
                 compact = {
                     "dataset": dataset,
                     "noise_ratio": ratio,
                     "arm": arm,
                     "seeds": sorted(int(row["seed"]) for row in case_rows),
                     "metrics": {
-                        key: _metric_summary(case_rows, key) for key in metric_keys
+                        "best_recall_at_20": _metric_summary(
+                            case_rows, recall_key
+                        ),
+                        "best_ndcg_at_20": _metric_summary(
+                            case_rows, ndcg_key
+                        ),
+                        "best_epoch": _metric_summary(case_rows, epoch_key),
+                        **{
+                            key: _metric_summary(case_rows, key)
+                            for key in metric_keys
+                        },
                     },
+                    "selection_scope": (
+                        "post_filter" if arm in filtered_arms else "full_run"
+                    ),
                 }
                 rows_out.append(compact)
                 lookup[(dataset, ratio, arm)] = compact
@@ -148,7 +178,7 @@ def analyze(
         "schema_version": "nrgcf_full_edge_filter_norm_summary_v1",
         "source": report.get("root"),
         "protocol": {
-            "objective": "bpr",
+            "objective": str(profile.get("objective", "bpr")),
             "noise": "degree-preserving uniform edge replacement",
             "selection_split": "test",
             "early_stopping_monitor": "Recall@20",
@@ -179,7 +209,8 @@ def _markdown(result: dict[str, Any]) -> str:
         "full": "+Filter+Norm",
     }
     lines = [
-        "# Full BPR edge-filter + CrossNorm experiment",
+        "# Full " + str(result["protocol"]["objective"]).upper()
+        + " edge-filter + CrossNorm experiment",
         "",
         "All structural features and filtering decisions use training edges only. "
         "Synthetic labels are evaluation-only. Hyperparameter selection and early "
