@@ -694,6 +694,15 @@ class NRGCF(RecModel):
                             num_users=self.num_users,
                         )
                     )
+            elif not self.training:
+                self.last_modulation_layer_magnitudes.append(
+                    self._embedding_magnitudes(
+                        before=x,
+                        crossnorm=x,
+                        after=x,
+                        num_users=self.num_users,
+                    )
+                )
             out.append(x)
         return torch.stack(out, dim=1)
 
