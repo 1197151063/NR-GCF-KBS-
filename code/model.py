@@ -275,6 +275,7 @@ class NRGCF(RecModel):
         self.last_user_block_rms = None
         self.last_item_block_rms = None
         self.last_modulation_layer_scales = []
+        self.last_modulation_layer_magnitudes = []
         self.register_buffer(
             'user_modulation_weight', torch.ones(num_users, dtype=torch.float32)
         )
@@ -596,6 +597,16 @@ class NRGCF(RecModel):
                 'user_embedding_divisor': scalar_or_none(layer_item_rms),
                 'item_embedding_divisor': scalar_or_none(layer_user_rms),
             })
+        layer_magnitudes = []
+        for layer, values in enumerate(
+                self.last_modulation_layer_magnitudes, 1):
+            layer_magnitudes.append({
+                'layer': int(layer),
+                **{
+                    name: scalar_or_none(value)
+                    for name, value in values.items()
+                },
+            })
         return {
             'active': bool(self.modulation_active),
             'progress': float(self.modulation_progress),
@@ -621,7 +632,25 @@ class NRGCF(RecModel):
             'user_embedding_divisor': item_rms,
             'item_embedding_divisor': user_rms,
             'layer_scales': layer_scales,
+            'layer_magnitudes': layer_magnitudes,
         }
+
+    @staticmethod
+    def _embedding_magnitudes(before, crossnorm, after, num_users):
+        """Compact mean-L2 statistics for one propagation layer."""
+        values = {}
+        for stage, embeddings in (
+                ('before', before),
+                ('pure_crossnorm', crossnorm),
+                ('after', after)):
+            detached = embeddings.detach()
+            user, item = torch.split(
+                detached, [num_users, detached.size(0) - num_users]
+            )
+            values[f'{stage}_all_mean_l2'] = detached.norm(dim=1).mean()
+            values[f'{stage}_user_mean_l2'] = user.norm(dim=1).mean()
+            values[f'{stage}_item_mean_l2'] = item.norm(dim=1).mean()
+        return values
         
     def _forward_layers(self, edge_index, apply_message_dropout=True):
         user_emb = self.user_embedding.weight
@@ -629,6 +658,7 @@ class NRGCF(RecModel):
         x = torch.cat([user_emb, item_emb], dim=0)
         if not self.training:
             self.last_modulation_layer_scales = []
+            self.last_modulation_layer_magnitudes = []
         out = [x]
         for i in range(self.config['K']):
             x = self.propagate(edge_index, x=x)
@@ -641,6 +671,7 @@ class NRGCF(RecModel):
                 )
             modulation_strength = self.modulation_progress
             if modulation_strength != 0.0:
+                x_before_crossnorm = x
                 x_c = self.cross_norm(x)
                 if self.representation_modulation_mode == 'blend_always':
                     # Paper-style sensitivity operator.  This is opt-in and
@@ -654,6 +685,15 @@ class NRGCF(RecModel):
                     # Optional transition only; recommended experiments use
                     # ramp_epochs=0 and therefore never enter this branch.
                     x = modulation_strength * x_c + (1 - modulation_strength) * x
+                if not self.training:
+                    self.last_modulation_layer_magnitudes.append(
+                        self._embedding_magnitudes(
+                            before=x_before_crossnorm,
+                            crossnorm=x_c,
+                            after=x,
+                            num_users=self.num_users,
+                        )
+                    )
             out.append(x)
         return torch.stack(out, dim=1)
 
