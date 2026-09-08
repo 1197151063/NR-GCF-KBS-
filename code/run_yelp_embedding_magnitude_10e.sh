@@ -2,7 +2,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/yelp_embedding_magnitude_10e}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/yelp_embedding_magnitude_10e_v2}"
 seed="${SEED:-2026}"
 if ! [[ "$seed" =~ ^[0-9]+$ ]]; then
   echo "SEED must be a non-negative integer." >&2
@@ -16,6 +16,8 @@ fi
 run_arm() {
   local name="$1"
   local mode="$2"
+  local learning_rate="$3"
+  local init_weight="$4"
   DATASET=yelp2018 \
   NOISE_MODE=degree_preserving_replace \
   NOISE_RATIOS=0 \
@@ -25,9 +27,9 @@ run_arm() {
   TRAIN_EPOCHS=10 \
   TRAIN_PATIENCE=20 \
   TRAIN_BATCH_SIZE=2048 \
-  TRAIN_LR=0.0005 \
+  TRAIN_LR="$learning_rate" \
   TRAIN_INIT_METHOD=normal \
-  TRAIN_INIT_WEIGHT=0.01 \
+  TRAIN_INIT_WEIGHT="$init_weight" \
   TRAIN_DECAY=0.0001 \
   TRAINING_OBJECTIVE=bpr \
   EDGE_FILTER_MODE=none \
@@ -43,8 +45,8 @@ run_arm() {
     bash "$script_dir/run_edge_diagnostics_grid.sh"
 }
 
-run_arm lightgcn none
-run_arm norm blend_always
+run_arm lightgcn none 0.001 0.1
+run_arm norm blend_always 0.0005 0.01
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
