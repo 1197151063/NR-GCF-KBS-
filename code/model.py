@@ -985,6 +985,165 @@ class ObjectiveMF(NRGCF):
             metadata['evaluation_scoring'] = 'raw_mf_embedding_dot_product'
         return metadata
 
+
+class ObjectiveGTN(NRGCF):
+    """Independent Graph Trend Filtering comparison method.
+
+    The encoder follows the primal-dual GTCF iteration from GTN while using a
+    sparse edge-node incidence matrix.  It intentionally excludes SDR-GCF
+    filtering and CrossNorm so that it remains an independent baseline.
+    """
+
+    def __init__(self, num_users, num_items, config, edge_index):
+        # Skip NRGCF.__init__: GTN uses its incidence operator rather than a
+        # normalized node-node propagation matrix.
+        RecModel.__init__(self, num_users, num_items, config, edge_index)
+        self.lambda_ = 0.0
+        self.representation_modulation_mode = 'none'
+        self.modulation_ramp_epochs = 0
+        self.modulation_filtering_epoch = None
+        self.modulation_active = False
+        self.modulation_progress = 0.0
+        self.last_user_block_rms = None
+        self.last_item_block_rms = None
+        self.last_modulation_layer_scales = []
+        self.last_modulation_layer_magnitudes = []
+        self.objective_message_dropout = 0.0
+        self.momentum_loss = torch.zeros(
+            edge_index.size(1), device=edge_index.device
+        )
+        self.active_edge_count = int(edge_index.size(1))
+        self.last_objective_epoch_state = None
+
+        self.gtn_iterations = int(config['K'])
+        self.gtn_lambda = float(config['gtn_lambda'])
+        self.gtn_prop_dropout = float(config['gtn_prop_dropout'])
+        if self.gtn_iterations < 1:
+            raise ValueError('GTN requires at least one filtering iteration')
+        if not math.isfinite(self.gtn_lambda) or self.gtn_lambda < 0:
+            raise ValueError('GTN lambda must be finite and non-negative')
+        if (not math.isfinite(self.gtn_prop_dropout)
+                or not 0.0 <= self.gtn_prop_dropout < 1.0):
+            raise ValueError(
+                'GTN propagation dropout must be finite and within [0, 1)'
+            )
+        self.incident_matrix = self._build_normalized_incidence(edge_index)
+
+    def _build_normalized_incidence(self, edge_index):
+        """Build B(D+I)^(-1/2) directly from bipartite interactions."""
+        edge_count = int(edge_index.size(1))
+        item_nodes = edge_index[1] + self.num_users
+        # Match the orientation selected by the released implementation from
+        # the symmetric graph: item endpoint +1, user endpoint -1.
+        columns = torch.cat([item_nodes, edge_index[0]], dim=0)
+        rows = torch.arange(
+            edge_count, device=edge_index.device, dtype=torch.long
+        ).repeat(2)
+        node_degree = torch.bincount(
+            torch.cat([edge_index[0], item_nodes]),
+            minlength=self.num_nodes,
+        ).to(dtype=self.user_embedding.weight.dtype)
+        inverse_sqrt_degree = (node_degree + 1.0).pow(-0.5)
+        signs = torch.cat([
+            torch.ones(
+                edge_count,
+                device=edge_index.device,
+                dtype=self.user_embedding.weight.dtype,
+            ),
+            -torch.ones(
+                edge_count,
+                device=edge_index.device,
+                dtype=self.user_embedding.weight.dtype,
+            ),
+        ])
+        values = signs * inverse_sqrt_degree[columns]
+        return SparseTensor(
+            row=rows,
+            col=columns,
+            value=values,
+            sparse_sizes=(edge_count, self.num_nodes),
+        )
+
+    def _trend_filtered_embedding(self):
+        initial = torch.cat([
+            self.user_embedding.weight,
+            self.item_embedding.weight,
+        ], dim=0)
+        dual = None
+        output = initial
+        for _ in range(self.gtn_iterations):
+            if dual is None:
+                primal_prediction = initial
+                dual_candidate = 0.5 * (
+                    self.incident_matrix @ primal_prediction
+                )
+            else:
+                primal_prediction = initial - (
+                    self.incident_matrix.t() @ dual
+                )
+                dual_candidate = dual + 0.5 * (
+                    self.incident_matrix @ primal_prediction
+                )
+            dual = torch.clamp(
+                dual_candidate,
+                min=-self.gtn_lambda,
+                max=self.gtn_lambda,
+            )
+            output = initial - (self.incident_matrix.t() @ dual)
+            # Retain GTN's propagation dropout and its per-iteration RNG use.
+            output = F.dropout(
+                output, p=self.gtn_prop_dropout, training=self.training
+            )
+        return output
+
+    def _forward_layers(self, edge_index, apply_message_dropout=True):
+        del edge_index, apply_message_dropout
+        return self._trend_filtered_embedding().unsqueeze(1)
+
+    def ssm_loss(self, edge_label_index:LongTensor, return_aux=False):
+        """In-batch SSM on final GTN embeddings with ego-parameter L2."""
+        user_all, item_all = self.forward(edge_index=self.edge_index)
+        user_embedding = user_all[edge_label_index[0]]
+        positive_item_embedding = item_all[edge_label_index[1]]
+        instance_loss = ssm_in_batch_instance_loss(
+            user_embedding,
+            positive_item_embedding,
+            temperature=self.config['tau'],
+        )
+        batch_size = edge_label_index.size(1)
+        regularization = self.config['decay'] * 0.5 * (
+            self.user_embedding.weight[edge_label_index[0]].pow(2).sum()
+            + self.item_embedding.weight[edge_label_index[1]].pow(2).sum()
+        ) / batch_size
+        total = instance_loss.mean() + regularization
+        if return_aux:
+            return total, {'instance_loss': instance_loss.detach()}
+        return total
+
+    def objective_metadata(self):
+        metadata = super().objective_metadata()
+        metadata.update({
+            'backbone': 'gtn',
+            'encoder': 'graph_trend_filtering_primal_dual_iteration',
+            'propagation_layers': self.gtn_iterations,
+            'gtn_lambda': self.gtn_lambda,
+            'gtn_prop_dropout': self.gtn_prop_dropout,
+            'incidence_representation': 'sparse_edge_by_node',
+            'dense_node_node_matrix': False,
+            'cross_type_normalization': False,
+        })
+        if metadata['name'] == 'ssm':
+            metadata['regularization'] = (
+                'selected_user_and_positive_item_ego_embedding_l2'
+            )
+        if 'message_dropout' in metadata:
+            metadata['message_dropout'] = 0.0
+        if 'evaluation_scoring' in metadata:
+            metadata['evaluation_scoring'] = (
+                'raw_final_gtn_embedding_dot_product'
+            )
+        return metadata
+
 class NRGCL(RecModel):
     #InfoNCE + NRGCF
     #We use SGL as baseline to implement NR-GCL

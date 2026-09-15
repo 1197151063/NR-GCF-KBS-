@@ -18,11 +18,20 @@ def parse_args():
 
     parser.add_argument(
         '--backbone', type=str, default='nrgcf',
-        choices=['nrgcf', 'mf'],
+        choices=['nrgcf', 'mf', 'gtn'],
         help=(
-            'encoder backbone: graph propagation (nrgcf) or plain matrix '
-            'factorization embeddings (mf)'
+            'encoder backbone: graph propagation (nrgcf), plain matrix '
+            'factorization embeddings (mf), or graph trend filtering (gtn)'
         ),
+    )
+
+    parser.add_argument(
+        '--gtn-lambda', type=float, default=3.0,
+        help='GTN graph-trend L1 smoothness coefficient (default: 3)',
+    )
+    parser.add_argument(
+        '--gtn-prop-dropout', type=float, default=0.1,
+        help='dropout on each GTN trend-filtering iterate (default: 0.1)',
     )
 
     parser.add_argument('--lr', type=float, default=0.001,

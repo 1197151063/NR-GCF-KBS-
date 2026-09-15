@@ -68,6 +68,11 @@ def summarize(root):
         filtering_timing = training.get("filtering_timing") or {}
         early_stopping = training.get("early_stopping") or {}
         training_objective = training.get("training_objective") or {}
+        backbone = (
+            training_objective.get("backbone")
+            or manifest.get("backbone")
+            or "nrgcf"
+        )
         parameters = reliability.get("parameters") or {}
         adaptive_trace = adaptive_filtering.get("trace") or []
         trigger_snapshot = adaptive_trace[-1] if adaptive_trace else {}
@@ -77,12 +82,22 @@ def summarize(root):
             "mode": reliability.get("mode") or manifest.get("edge_filter_mode"),
             "training_objective": training_objective.get("name", "bpr"),
             "training_objective_metadata": training_objective,
-            "backbone": (
-                training_objective.get("backbone")
-                or manifest.get("backbone")
-                or "nrgcf"
-            ),
+            "backbone": backbone,
             "train_num_layers": _number(manifest.get("train_k"), int),
+            "gtn_lambda": (
+                (
+                    training_objective.get("gtn_lambda")
+                    if training_objective.get("gtn_lambda") is not None
+                    else _number(manifest.get("gtn_lambda"))
+                ) if backbone == "gtn" else None
+            ),
+            "gtn_prop_dropout": (
+                (
+                    training_objective.get("gtn_prop_dropout")
+                    if training_objective.get("gtn_prop_dropout") is not None
+                    else _number(manifest.get("gtn_prop_dropout"))
+                ) if backbone == "gtn" else None
+            ),
             "train_learning_rate": _number(manifest.get("train_lr")),
             "train_decay": _number(manifest.get("train_decay")),
             "train_batch_size": _number(

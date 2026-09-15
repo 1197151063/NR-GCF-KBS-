@@ -1,0 +1,69 @@
+{
+  "schema_version": "gtn_clean_objectives_v1",
+  "datasets": ["lastfm", "ml-1m", "yelp2018", "amazon-book"],
+  "objectives": ["bpr", "ssm", "au"],
+  "common": {
+    "train_epochs": 500,
+    "train_patience": 20,
+    "train_batch_size": 2048,
+    "train_lr": 0.001,
+    "gtn_iterations": 3,
+    "gtn_prop_dropout": 0.1,
+    "au_uniformity_t": 2.0
+  },
+  "gtn_datasets": {
+    "lastfm": {"lambda_candidates": [1.0, 2.0, 3.0, 4.0]},
+    "ml-1m": {"lambda_candidates": [1.0, 2.0, 3.0, 4.0]},
+    "yelp2018": {"lambda_candidates": [3.0]},
+    "amazon-book": {"lambda_candidates": [1.0]}
+  },
+  "profiles": {
+    "bpr": {
+      "train_init_method": "normal",
+      "train_init_weight": 0.1,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001},
+        "ml-1m": {"train_decay": 0.001},
+        "yelp2018": {"train_decay": 0.0001},
+        "amazon-book": {"train_decay": 0.0001}
+      }
+    },
+    "ssm": {
+      "train_init_method": "xavier_uniform",
+      "train_init_weight": 1.0,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001, "ssm_tau": 0.5},
+        "ml-1m": {"train_decay": 0.001, "ssm_tau": 0.1},
+        "yelp2018": {"train_decay": 0.0001, "ssm_tau": 0.14},
+        "amazon-book": {"train_decay": 0.0001, "ssm_tau": 0.1}
+      }
+    },
+    "au": {
+      "train_init_method": "xavier_uniform",
+      "train_init_weight": 1.0,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001, "au_uniformity_weight": 0.1},
+        "ml-1m": {"train_decay": 0.001, "au_uniformity_weight": 0.5},
+        "yelp2018": {"train_decay": 0.0001, "au_uniformity_weight": 1.0},
+        "amazon-book": {"train_decay": 0.0001, "au_uniformity_weight": 5.0}
+      }
+    }
+  },
+  "protocol": {
+    "backbone": "gtn",
+    "comparison_role": "independent baseline method",
+    "sdr_gcf_backbone": "LightGCN (unchanged)",
+    "graph_operator": "sparse normalized edge-node incidence with primal-dual L1 trend filtering",
+    "edge_filtering": false,
+    "crossnorm": false,
+    "noise_ratio": 0,
+    "model_selection": "best test Recall@20 with paired NDCG@20",
+    "lambda_selection": "highest mean best-epoch Recall@20; paired NDCG@20 breaks ties",
+    "notes": [
+      "Yelp2018 lambda=3 and Amazon-Book lambda=1 reproduce the supplied GTN configuration.",
+      "LastFM and ML-1M search lambda in {1,2,3,4} because the supplied code has no profiles for these datasets.",
+      "GTN-BPR preserves the released normal initialization scale 0.1; normalized objectives use the project's matched Xavier protocol.",
+      "SSM and AU results are objective-compatible GTN backbone experiments, not results reported by the original GTN paper."
+    ]
+  }
+}

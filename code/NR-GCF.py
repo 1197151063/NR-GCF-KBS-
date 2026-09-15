@@ -8,7 +8,7 @@ import utils
 import os
 import random
 import numpy as np
-from model import NRGCF, ObjectiveMF, RecModel
+from model import NRGCF, ObjectiveGTN, ObjectiveMF, RecModel
 from utils import init_logger, print_log, write_final_log
 
 
@@ -40,6 +40,8 @@ config = {
     'adap_tau_initial_positive_gap': world.adap_tau_initial_positive_gap,
     'au_uniformity_weight': world.au_uniformity_weight,
     'au_uniformity_t': world.au_uniformity_t,
+    'gtn_lambda': world.gtn_lambda,
+    'gtn_prop_dropout': world.gtn_prop_dropout,
 }
 
 config['representation_modulation_mode'] = (
@@ -232,6 +234,16 @@ if world.training_objective == 'au':
         raise ValueError('--au-uniformity-weight must be non-negative')
     if world.au_uniformity_t <= 0:
         raise ValueError('--au-uniformity-t must be positive')
+if world.backbone == 'gtn':
+    if not np.isfinite(world.gtn_lambda) or world.gtn_lambda < 0:
+        raise ValueError('--gtn-lambda must be finite and non-negative')
+    if (not np.isfinite(world.gtn_prop_dropout)
+            or not 0.0 <= world.gtn_prop_dropout < 1.0):
+        raise ValueError(
+            '--gtn-prop-dropout must be finite and within [0, 1)'
+        )
+    if world.training_objective == 'adap_tau':
+        raise ValueError('GTN supports only BPR, SSM, and AU objectives.')
 if (world.training_objective == 'ssm'
         and world.args.edge_filter_mode not in (
             'none', 'hard_structure_momentum')):
@@ -305,7 +317,11 @@ if (world.args.representation_modulation_mode in (
     )
 dataset = Loader()
 log_path = init_logger(
-    model_name=('MF' if world.backbone == 'mf' else 'NR-GCF-new'),
+    model_name=(
+        'MF' if world.backbone == 'mf' else
+        'GTN' if world.backbone == 'gtn' else
+        'NR-GCF-new'
+    ),
     dataset_name=world.config['dataset'],
 )
 
@@ -318,14 +334,23 @@ original_train_edge_index = (
 test_edge_index = dataset.test_edge_index.to(device)
 num_users = dataset.num_users
 num_items = dataset.num_items
-if world.backbone == 'mf':
+if world.backbone in ('mf', 'gtn'):
     if world.args.edge_filter_mode != 'none':
-        raise ValueError('MF baseline requires --edge-filter-mode none.')
+        raise ValueError(
+            world.backbone.upper()
+            + ' baseline requires --edge-filter-mode none.'
+        )
     if world.args.representation_modulation_mode != 'none':
         raise ValueError(
-            'MF baseline requires --representation-modulation-mode none.'
+            world.backbone.upper()
+            + ' baseline requires --representation-modulation-mode none.'
         )
-model_class = ObjectiveMF if world.backbone == 'mf' else NRGCF
+model_classes = {
+    'nrgcf': NRGCF,
+    'mf': ObjectiveMF,
+    'gtn': ObjectiveGTN,
+}
+model_class = model_classes[world.backbone]
 model = model_class(num_users=num_users,
                  num_items=num_items,
                  edge_index=train_edge_index,
@@ -434,6 +459,7 @@ for epoch in range(1, world.TRAIN_epochs + 1):
                  update_legacy_momentum=(
                      world.training_objective == 'bpr'
                      and not uses_stable_momentum
+                     and not filtering_disabled
                  ))
     filter_now = (
         not filtering_disabled

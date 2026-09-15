@@ -31,6 +31,10 @@ training_objective = args.training_objective
 
 backbone = args.backbone
 
+gtn_lambda = args.gtn_lambda
+
+gtn_prop_dropout = args.gtn_prop_dropout
+
 objective_message_dropout = args.objective_message_dropout
 
 adap_tau_mode = args.adap_tau_mode

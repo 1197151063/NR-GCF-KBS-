@@ -79,8 +79,10 @@ Optional variables:
   TRAIN_INIT_WEIGHT       optional embedding initialization std override
   TRAIN_BATCH_SIZE        optional interaction batch size override
   TRAIN_DECAY             optional L2 coefficient override
-  BACKBONE                nrgcf or mf (default: nrgcf)
+  BACKBONE                nrgcf, mf, or gtn (default: nrgcf)
   TRAIN_K                 optional graph propagation layer count override
+  GTN_LAMBDA              GTN graph-trend L1 coefficient (default: 3)
+  GTN_PROP_DROPOUT        GTN propagation dropout (default: 0.1)
   TRAINING_OBJECTIVE      bpr, ssm, au, or adap_tau (default: bpr)
   SSM_NUM_NEG             legacy metadata; ignored by reference in-batch SSM
   SSM_TAU                 SSM cosine-softmax temperature (default: 0.1)
@@ -177,6 +179,8 @@ train_batch_size="${TRAIN_BATCH_SIZE:-}"
 train_decay="${TRAIN_DECAY:-}"
 backbone="${BACKBONE:-nrgcf}"
 train_k="${TRAIN_K:-}"
+gtn_lambda="${GTN_LAMBDA:-3.0}"
+gtn_prop_dropout="${GTN_PROP_DROPOUT:-0.1}"
 training_objective="${TRAINING_OBJECTIVE:-bpr}"
 ssm_num_neg="${SSM_NUM_NEG:-1024}"
 ssm_tau="${SSM_TAU:-0.1}"
@@ -233,8 +237,9 @@ if [[ "$training_objective" != "bpr" && \
   echo "TRAINING_OBJECTIVE must be bpr, ssm, au, or adap_tau." >&2
   exit 2
 fi
-if [[ "$backbone" != "nrgcf" && "$backbone" != "mf" ]]; then
-  echo "BACKBONE must be nrgcf or mf." >&2
+if [[ "$backbone" != "nrgcf" && "$backbone" != "mf" && \
+      "$backbone" != "gtn" ]]; then
+  echo "BACKBONE must be nrgcf, mf, or gtn." >&2
   exit 2
 fi
 if [[ -n "$train_k" ]] && \
@@ -242,14 +247,29 @@ if [[ -n "$train_k" ]] && \
   echo "TRAIN_K must be a non-negative integer when provided." >&2
   exit 2
 fi
-if [[ "$backbone" == "mf" && "$edge_filter_mode" != "none" ]]; then
-  echo "MF requires EDGE_FILTER_MODE=none." >&2
+if [[ ( "$backbone" == "mf" || "$backbone" == "gtn" ) && \
+      "$edge_filter_mode" != "none" ]]; then
+  echo "${backbone^^} requires EDGE_FILTER_MODE=none." >&2
   exit 2
 fi
-if [[ "$backbone" == "mf" && "$representation_modulation_mode" != "none" ]]; then
-  echo "MF requires REPRESENTATION_MODULATION_MODE=none." >&2
+if [[ ( "$backbone" == "mf" || "$backbone" == "gtn" ) && \
+      "$representation_modulation_mode" != "none" ]]; then
+  echo "${backbone^^} requires REPRESENTATION_MODULATION_MODE=none." >&2
   exit 2
 fi
+if [[ "$backbone" == "gtn" && "$training_objective" == "adap_tau" ]]; then
+  echo "GTN supports only BPR, SSM, and AU objectives." >&2
+  exit 2
+fi
+python3 - "$gtn_lambda" "$gtn_prop_dropout" <<'PY'
+import math
+import sys
+coefficient, dropout = map(float, sys.argv[1:])
+if not math.isfinite(coefficient) or coefficient < 0:
+    raise SystemExit("GTN_LAMBDA must be finite and non-negative")
+if not math.isfinite(dropout) or not 0 <= dropout < 1:
+    raise SystemExit("GTN_PROP_DROPOUT must be within [0, 1)")
+PY
 if [[ "$training_objective" == "ssm" && "$edge_filter_mode" != "none" && \
       "$edge_filter_mode" != "hard_structure_momentum" ]]; then
   echo "SSM filtering supports only EDGE_FILTER_MODE=hard_structure_momentum." >&2
@@ -765,6 +785,9 @@ echo "  edge filter: $edge_filter_mode"
 echo "  training objective: $training_objective"
 echo "  backbone:   $backbone"
 echo "  train K:    ${train_k:-entry_default}"
+if [[ "$backbone" == "gtn" ]]; then
+  echo "  GTN lambda/dropout: ${gtn_lambda}/${gtn_prop_dropout}"
+fi
 if [[ "$training_objective" == "ssm" ]]; then
   echo "  SSM negatives/tau: batch_size-1/${ssm_tau} (num_neg ignored)"
 elif [[ "$training_objective" == "au" ]]; then
@@ -895,6 +918,8 @@ for ratio in $noise_ratios; do
       --requested-noise-ratio "$ratio"
       --training-objective "$training_objective"
       --backbone "$backbone"
+      --gtn-lambda "$gtn_lambda"
+      --gtn-prop-dropout "$gtn_prop_dropout"
       --embedding-init "$train_init_method"
       --num_neg "$ssm_num_neg"
       --tau "$ssm_tau"
@@ -985,6 +1010,8 @@ for ratio in $noise_ratios; do
       echo "training_objective=$training_objective"
       echo "backbone=$backbone"
       echo "train_k=${train_k:-entry_default}"
+      echo "gtn_lambda=$gtn_lambda"
+      echo "gtn_prop_dropout=$gtn_prop_dropout"
       echo "ssm_num_neg=$ssm_num_neg"
       echo "ssm_tau=$ssm_tau"
       echo "au_uniformity_weight=$au_uniformity_weight"
