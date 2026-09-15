@@ -8,7 +8,7 @@ import utils
 import os
 import random
 import numpy as np
-from model import NRGCF,RecModel
+from model import NRGCF, ObjectiveMF, RecModel
 from utils import init_logger, print_log, write_final_log
 
 
@@ -24,7 +24,7 @@ config = {
     'init_weight': world.init_weight,
     'dim':64,#EMBEDDING_SIZE
     'decay':world.decay,#L2_NORM
-    'K':3,
+    'K':world.config['K'],
     'beta':0.8,#BETA
     'lambda': world.lambda_,
     'lr':world.lr,#LEARNING_RATE
@@ -304,7 +304,10 @@ if (world.args.representation_modulation_mode in (
         'uses the validated structure-momentum semantics.'
     )
 dataset = Loader()
-log_path = init_logger(model_name='NR-GCF-new', dataset_name=world.config['dataset'])
+log_path = init_logger(
+    model_name=('MF' if world.backbone == 'mf' else 'NR-GCF-new'),
+    dataset_name=world.config['dataset'],
+)
 
 
 train_edge_index = dataset.train_edge_index.to(device)
@@ -315,7 +318,15 @@ original_train_edge_index = (
 test_edge_index = dataset.test_edge_index.to(device)
 num_users = dataset.num_users
 num_items = dataset.num_items
-model = NRGCF(num_users=num_users,
+if world.backbone == 'mf':
+    if world.args.edge_filter_mode != 'none':
+        raise ValueError('MF baseline requires --edge-filter-mode none.')
+    if world.args.representation_modulation_mode != 'none':
+        raise ValueError(
+            'MF baseline requires --representation-modulation-mode none.'
+        )
+model_class = ObjectiveMF if world.backbone == 'mf' else NRGCF
+model = model_class(num_users=num_users,
                  num_items=num_items,
                  edge_index=train_edge_index,
                  config=config).to(device)

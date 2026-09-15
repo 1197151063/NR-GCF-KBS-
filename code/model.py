@@ -933,6 +933,58 @@ class NRGCF(RecModel):
             prev = self.momentum_loss[index]
             self.momentum_loss[index] = w * prev + (1.0 - w) * instance_loss
 
+
+class ObjectiveMF(NRGCF):
+    """Plain MF embeddings trained with the shared BPR/SSM/AU objectives.
+
+    Inheriting the objective implementations keeps sampling, regularization,
+    initialization, and evaluation identical to the corresponding LightGCN
+    baseline.  Only graph propagation and CrossNorm are removed.
+    """
+
+    def __init__(self, num_users, num_items, config, edge_index):
+        # Deliberately skip NRGCF.__init__: MF must not build or retain a
+        # normalized propagation graph merely to reuse objective functions.
+        RecModel.__init__(self, num_users, num_items, config, edge_index)
+        self.lambda_ = 0.0
+        self.representation_modulation_mode = 'none'
+        self.modulation_ramp_epochs = 0
+        self.modulation_filtering_epoch = None
+        self.modulation_active = False
+        self.modulation_progress = 0.0
+        self.last_user_block_rms = None
+        self.last_item_block_rms = None
+        self.last_modulation_layer_scales = []
+        self.last_modulation_layer_magnitudes = []
+        self.objective_message_dropout = 0.0
+        self.momentum_loss = torch.zeros(
+            edge_index.size(1), device=edge_index.device
+        )
+        self.active_edge_count = 0
+        self.last_objective_epoch_state = None
+
+    def _forward_layers(self, edge_index, apply_message_dropout=True):
+        del edge_index, apply_message_dropout
+        embeddings = torch.cat([
+            self.user_embedding.weight,
+            self.item_embedding.weight,
+        ], dim=0)
+        return embeddings.unsqueeze(1)
+
+    def objective_metadata(self):
+        metadata = super().objective_metadata()
+        metadata.update({
+            'backbone': 'mf',
+            'propagation_layers': 0,
+            'graph_propagation': False,
+            'cross_type_normalization': False,
+        })
+        if 'message_dropout' in metadata:
+            metadata['message_dropout'] = 0.0
+        if 'evaluation_scoring' in metadata:
+            metadata['evaluation_scoring'] = 'raw_mf_embedding_dot_product'
+        return metadata
+
 class NRGCL(RecModel):
     #InfoNCE + NRGCF
     #We use SGL as baseline to implement NR-GCL

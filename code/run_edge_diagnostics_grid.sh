@@ -79,6 +79,8 @@ Optional variables:
   TRAIN_INIT_WEIGHT       optional embedding initialization std override
   TRAIN_BATCH_SIZE        optional interaction batch size override
   TRAIN_DECAY             optional L2 coefficient override
+  BACKBONE                nrgcf or mf (default: nrgcf)
+  TRAIN_K                 optional graph propagation layer count override
   TRAINING_OBJECTIVE      bpr, ssm, au, or adap_tau (default: bpr)
   SSM_NUM_NEG             legacy metadata; ignored by reference in-batch SSM
   SSM_TAU                 SSM cosine-softmax temperature (default: 0.1)
@@ -173,6 +175,8 @@ train_init_method="${TRAIN_INIT_METHOD:-auto}"
 train_init_weight="${TRAIN_INIT_WEIGHT:-}"
 train_batch_size="${TRAIN_BATCH_SIZE:-}"
 train_decay="${TRAIN_DECAY:-}"
+backbone="${BACKBONE:-nrgcf}"
+train_k="${TRAIN_K:-}"
 training_objective="${TRAINING_OBJECTIVE:-bpr}"
 ssm_num_neg="${SSM_NUM_NEG:-1024}"
 ssm_tau="${SSM_TAU:-0.1}"
@@ -227,6 +231,23 @@ if [[ "$training_objective" != "bpr" && \
       "$training_objective" != "au" && \
       "$training_objective" != "adap_tau" ]]; then
   echo "TRAINING_OBJECTIVE must be bpr, ssm, au, or adap_tau." >&2
+  exit 2
+fi
+if [[ "$backbone" != "nrgcf" && "$backbone" != "mf" ]]; then
+  echo "BACKBONE must be nrgcf or mf." >&2
+  exit 2
+fi
+if [[ -n "$train_k" ]] && \
+   { ! [[ "$train_k" =~ ^[0-9]+$ ]]; }; then
+  echo "TRAIN_K must be a non-negative integer when provided." >&2
+  exit 2
+fi
+if [[ "$backbone" == "mf" && "$edge_filter_mode" != "none" ]]; then
+  echo "MF requires EDGE_FILTER_MODE=none." >&2
+  exit 2
+fi
+if [[ "$backbone" == "mf" && "$representation_modulation_mode" != "none" ]]; then
+  echo "MF requires REPRESENTATION_MODULATION_MODE=none." >&2
   exit 2
 fi
 if [[ "$training_objective" == "ssm" && "$edge_filter_mode" != "none" && \
@@ -742,6 +763,8 @@ echo "  output:     $output_root"
 echo "  replacement selection: $replacement_selection"
 echo "  edge filter: $edge_filter_mode"
 echo "  training objective: $training_objective"
+echo "  backbone:   $backbone"
+echo "  train K:    ${train_k:-entry_default}"
 if [[ "$training_objective" == "ssm" ]]; then
   echo "  SSM negatives/tau: batch_size-1/${ssm_tau} (num_neg ignored)"
 elif [[ "$training_objective" == "au" ]]; then
@@ -871,6 +894,7 @@ for ratio in $noise_ratios; do
       --seed "$seed"
       --requested-noise-ratio "$ratio"
       --training-objective "$training_objective"
+      --backbone "$backbone"
       --embedding-init "$train_init_method"
       --num_neg "$ssm_num_neg"
       --tau "$ssm_tau"
@@ -943,6 +967,9 @@ for ratio in $noise_ratios; do
     if [[ -n "$train_decay" ]]; then
       command+=(--decay "$train_decay")
     fi
+    if [[ -n "$train_k" ]]; then
+      command+=(--K "$train_k")
+    fi
 
     {
       echo "base_commit=$commit_hash"
@@ -956,6 +983,8 @@ for ratio in $noise_ratios; do
       echo "replacement_selection=$replacement_selection"
       echo "edge_filter_mode=$edge_filter_mode"
       echo "training_objective=$training_objective"
+      echo "backbone=$backbone"
+      echo "train_k=${train_k:-entry_default}"
       echo "ssm_num_neg=$ssm_num_neg"
       echo "ssm_tau=$ssm_tau"
       echo "au_uniformity_weight=$au_uniformity_weight"

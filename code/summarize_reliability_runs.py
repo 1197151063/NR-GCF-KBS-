@@ -22,7 +22,7 @@ def _manifest(path):
 
 
 def _number(value, cast=float):
-    if value is None or value == "":
+    if value is None or value == "" or value == "entry_default":
         return None
     return cast(value)
 
@@ -77,6 +77,12 @@ def summarize(root):
             "mode": reliability.get("mode") or manifest.get("edge_filter_mode"),
             "training_objective": training_objective.get("name", "bpr"),
             "training_objective_metadata": training_objective,
+            "backbone": (
+                training_objective.get("backbone")
+                or manifest.get("backbone")
+                or "nrgcf"
+            ),
+            "train_num_layers": _number(manifest.get("train_k"), int),
             "train_learning_rate": _number(manifest.get("train_lr")),
             "train_decay": _number(manifest.get("train_decay")),
             "train_batch_size": _number(

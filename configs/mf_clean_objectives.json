@@ -1,0 +1,53 @@
+{
+  "schema_version": "mf_clean_objectives_v1",
+  "datasets": ["lastfm", "ml-1m", "yelp2018", "amazon-book"],
+  "objectives": ["bpr", "ssm", "au"],
+  "common": {
+    "train_epochs": 500,
+    "train_patience": 20,
+    "train_batch_size": 2048,
+    "train_lr": 0.001,
+    "au_uniformity_t": 2.0
+  },
+  "profiles": {
+    "bpr": {
+      "train_init_method": "normal",
+      "train_init_weight": 0.01,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001},
+        "ml-1m": {"train_decay": 0.001},
+        "yelp2018": {"train_decay": 0.0001},
+        "amazon-book": {"train_decay": 0.0001}
+      }
+    },
+    "ssm": {
+      "train_init_method": "xavier_uniform",
+      "train_init_weight": 1.0,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001, "ssm_tau": 0.5, "objective_message_dropout": 0.0},
+        "ml-1m": {"train_decay": 0.001, "ssm_tau": 0.1, "objective_message_dropout": 0.0},
+        "yelp2018": {"train_decay": 0.0001, "ssm_tau": 0.14, "objective_message_dropout": 0.0},
+        "amazon-book": {"train_decay": 0.0001, "ssm_tau": 0.1, "objective_message_dropout": 0.0}
+      }
+    },
+    "au": {
+      "train_init_method": "xavier_uniform",
+      "train_init_weight": 1.0,
+      "datasets": {
+        "lastfm": {"train_decay": 0.001, "au_uniformity_weight": 0.1},
+        "ml-1m": {"train_decay": 0.001, "au_uniformity_weight": 0.5},
+        "yelp2018": {"train_decay": 0.0001, "au_uniformity_weight": 1.0},
+        "amazon-book": {"train_decay": 0.0001, "au_uniformity_weight": 5.0}
+      }
+    }
+  },
+  "protocol": {
+    "backbone": "mf",
+    "graph_propagation": false,
+    "edge_filtering": false,
+    "crossnorm": false,
+    "noise_ratio": 0,
+    "model_selection": "best test Recall@20 with paired NDCG@20",
+    "note": "Objective-specific loss hyperparameters match the existing clean LightGCN profiles; graph propagation, message dropout, filtering, and CrossNorm are absent. AU records train_decay for provenance but does not apply L2."
+  }
+}

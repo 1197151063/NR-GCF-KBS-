@@ -16,6 +16,15 @@ def parse_args():
 
     parser.add_argument('--K', type=int, default=3)
 
+    parser.add_argument(
+        '--backbone', type=str, default='nrgcf',
+        choices=['nrgcf', 'mf'],
+        help=(
+            'encoder backbone: graph propagation (nrgcf) or plain matrix '
+            'factorization embeddings (mf)'
+        ),
+    )
+
     parser.add_argument('--lr', type=float, default=0.001,
                         help="the learning rate:0.001")  # 0.001
     

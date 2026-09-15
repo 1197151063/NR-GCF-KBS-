@@ -29,6 +29,8 @@ num_neg = args.num_neg
 
 training_objective = args.training_objective
 
+backbone = args.backbone
+
 objective_message_dropout = args.objective_message_dropout
 
 adap_tau_mode = args.adap_tau_mode
