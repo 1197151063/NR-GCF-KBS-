@@ -1,21 +1,17 @@
 {
-  "schema_version": "gtn_clean_objectives_v1",
+  "schema_version": "gtn_objective_noise_curve_v1",
   "datasets": ["lastfm", "ml-1m", "yelp2018", "amazon-book"],
   "objectives": ["bpr", "ssm", "au"],
+  "noise_ratios": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
   "common": {
     "train_epochs": 500,
     "train_patience": 20,
     "train_batch_size": 2048,
     "train_lr": 0.001,
     "gtn_iterations": 3,
+    "gtn_lambda": 1.0,
     "gtn_prop_dropout": 0.1,
     "au_uniformity_t": 2.0
-  },
-  "gtn_datasets": {
-    "lastfm": {"lambda_candidates": [1.0, 2.0, 3.0, 4.0]},
-    "ml-1m": {"lambda_candidates": [1.0, 2.0, 3.0, 4.0]},
-    "yelp2018": {"lambda_candidates": [3.0]},
-    "amazon-book": {"lambda_candidates": [1.0]}
   },
   "profiles": {
     "bpr": {
@@ -56,12 +52,12 @@
     "graph_operator": "sparse normalized edge-node incidence with primal-dual L1 trend filtering",
     "edge_filtering": false,
     "crossnorm": false,
-    "noise_ratio": 0,
+    "noise_ratios": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
     "model_selection": "best test Recall@20 with paired NDCG@20",
-    "lambda_selection": "highest mean best-epoch Recall@20; paired NDCG@20 breaks ties",
+    "gtn_lambda": 1.0,
     "notes": [
-      "Yelp2018 lambda=3 and Amazon-Book lambda=1 reproduce the supplied GTN configuration.",
-      "LastFM and ML-1M search lambda in {1,2,3,4} because the supplied code has no profiles for these datasets.",
+      "GTN lambda is fixed to 1 for every dataset, objective, and noise ratio.",
+      "The grid contains the clean case plus five degree-preserving replacement-noise cases from 0.1 to 0.5.",
       "GTN-BPR preserves the released normal initialization scale 0.1; normalized objectives use the project's matched Xavier protocol.",
       "SSM and AU results are objective-compatible GTN backbone experiments, not results reported by the original GTN paper."
     ]

@@ -32,7 +32,7 @@ def config(objective):
         "adap_tau_initial_positive_gap": 0.7,
         "au_uniformity_weight": 1.0,
         "au_uniformity_t": 2.0,
-        "gtn_lambda": 3.0,
+        "gtn_lambda": 1.0,
         "gtn_prop_dropout": 0.1,
         "representation_modulation_mode": "none",
         "representation_modulation_ramp_epochs": 0,

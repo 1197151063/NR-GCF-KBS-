@@ -26,8 +26,8 @@ def parse_args():
     )
 
     parser.add_argument(
-        '--gtn-lambda', type=float, default=3.0,
-        help='GTN graph-trend L1 smoothness coefficient (default: 3)',
+        '--gtn-lambda', type=float, default=1.0,
+        help='GTN graph-trend L1 smoothness coefficient (default: 1)',
     )
     parser.add_argument(
         '--gtn-prop-dropout', type=float, default=0.1,

@@ -81,7 +81,7 @@ Optional variables:
   TRAIN_DECAY             optional L2 coefficient override
   BACKBONE                nrgcf, mf, or gtn (default: nrgcf)
   TRAIN_K                 optional graph propagation layer count override
-  GTN_LAMBDA              GTN graph-trend L1 coefficient (default: 3)
+  GTN_LAMBDA              GTN graph-trend L1 coefficient (default: 1)
   GTN_PROP_DROPOUT        GTN propagation dropout (default: 0.1)
   TRAINING_OBJECTIVE      bpr, ssm, au, or adap_tau (default: bpr)
   SSM_NUM_NEG             legacy metadata; ignored by reference in-batch SSM
@@ -179,7 +179,7 @@ train_batch_size="${TRAIN_BATCH_SIZE:-}"
 train_decay="${TRAIN_DECAY:-}"
 backbone="${BACKBONE:-nrgcf}"
 train_k="${TRAIN_K:-}"
-gtn_lambda="${GTN_LAMBDA:-3.0}"
+gtn_lambda="${GTN_LAMBDA:-1.0}"
 gtn_prop_dropout="${GTN_PROP_DROPOUT:-0.1}"
 training_objective="${TRAINING_OBJECTIVE:-bpr}"
 ssm_num_neg="${SSM_NUM_NEG:-1024}"

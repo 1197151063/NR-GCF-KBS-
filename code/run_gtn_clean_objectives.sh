@@ -2,17 +2,18 @@
 set -euo pipefail
 
 # Independent GTN comparison under the project's BPR, SSM, and AU protocol.
-# LastFM and ML-1M run a compact lambda search; Yelp and Amazon-Book use the
-# supplied GTN reproduction values. SDR-GCF filtering and CrossNorm are off.
+# Lambda is fixed to 1. The grid contains clean data plus five replacement-
+# noise ratios. SDR-GCF filtering and CrossNorm are always off.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 profile_file="${PROFILE_FILE:-$repo_root/configs/gtn_clean_objectives.json}"
 datasets="${DATASETS:-lastfm ml-1m yelp2018 amazon-book}"
 objectives="${OBJECTIVES:-bpr ssm au}"
+noise_ratios="${NOISE_RATIOS:-}"
 seeds="${SEEDS:-2026}"
 gpu_id="${GPU_ID:-0}"
-output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_gtn_clean_objectives}"
+output_root="${OUTPUT_ROOT:-/root/autodl-tmp/outputs/outputs_gtn_objective_noise_curve}"
 dry_run="${DRY_RUN:-0}"
 skip_completed="${SKIP_COMPLETED:-1}"
 
@@ -36,6 +37,18 @@ read -r -a dataset_values <<<"$datasets"
 read -r -a objective_values <<<"$objectives"
 read -r -a seed_values <<<"$seeds"
 
+if [[ -z "$noise_ratios" ]]; then
+  noise_ratios="$(python3 - "$profile_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    profile = json.load(stream)
+print(" ".join(map(str, profile["noise_ratios"])))
+PY
+)"
+fi
+read -r -a noise_ratio_values <<<"$noise_ratios"
+
 profile_values() {
   local objective="$1"
   local dataset="$2"
@@ -56,7 +69,8 @@ dataset_profile = objective_profile["datasets"][dataset]
 values = [
     common["train_epochs"], common["train_patience"],
     common["train_batch_size"], common["train_lr"],
-    common["gtn_iterations"], common["gtn_prop_dropout"],
+    common["gtn_iterations"], common["gtn_lambda"],
+    common["gtn_prop_dropout"],
     objective_profile["train_init_method"],
     objective_profile["train_init_weight"],
     dataset_profile["train_decay"],
@@ -68,31 +82,17 @@ print("\t".join(map(str, values)))
 PY
 }
 
-lambda_values() {
-  local dataset="$1"
-  python3 - "$profile_file" "$dataset" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as stream:
-    profile = json.load(stream)
-dataset = sys.argv[2]
-if dataset not in profile["datasets"]:
-    raise SystemExit("Unsupported dataset: " + dataset)
-print(" ".join(map(str, profile["gtn_datasets"][dataset]["lambda_candidates"])))
-PY
-}
-
 run_case() {
   local dataset="$1"
   local objective="$2"
-  local seed="$3"
-  local gtn_lambda="$4"
-  local lambda_token="${gtn_lambda//./p}"
-  lambda_token="${lambda_token//-/m}"
-  local case_root="${output_root%/}/${objective}/${dataset}/lambda_${lambda_token}/seed_${seed}"
+  local noise_ratio="$3"
+  local seed="$4"
+  local noise_token="${noise_ratio//./p}"
+  noise_token="${noise_token//-/m}"
+  local case_root="${output_root%/}/${objective}/${dataset}/noise_${noise_token}/seed_${seed}"
   local completed="$case_root/comparison_summary.json"
   if [[ "$dry_run" != "1" && "$skip_completed" == "1" && -f "$completed" ]]; then
-    echo "Skip completed objective=$objective dataset=$dataset lambda=$gtn_lambda seed=$seed"
+    echo "Skip completed objective=$objective dataset=$dataset noise=$noise_ratio seed=$seed"
     return
   fi
   if [[ "$dry_run" != "1" && -e "$case_root" ]]; then
@@ -101,16 +101,18 @@ run_case() {
     exit 1
   fi
 
-  local epochs patience batch_size learning_rate iterations prop_dropout
+  local epochs patience batch_size learning_rate iterations gtn_lambda
+  local prop_dropout
   local init_method init_weight decay ssm_tau au_weight au_t
   IFS=$'\t' read -r epochs patience batch_size learning_rate iterations \
-    prop_dropout init_method init_weight decay ssm_tau au_weight au_t \
+    gtn_lambda prop_dropout init_method init_weight decay ssm_tau \
+    au_weight au_t \
     < <(profile_values "$objective" "$dataset")
 
-  echo "Start GTN objective=$objective dataset=$dataset lambda=$gtn_lambda seed=$seed"
+  echo "Start GTN objective=$objective dataset=$dataset noise=$noise_ratio lambda=$gtn_lambda seed=$seed"
   DATASET="$dataset" \
-  NOISE_MODE=prepared \
-  NOISE_RATIOS=0 \
+  NOISE_MODE=degree_preserving_replace \
+  NOISE_RATIOS="$noise_ratio" \
   SEEDS="$seed" \
   GPU_ID="$gpu_id" \
   OUTPUT_ROOT="$case_root" \
@@ -147,17 +149,14 @@ run_case() {
     python3 "$script_dir/summarize_reliability_runs.py" \
       --root "$case_root" --output "$completed"
   fi
-  echo "Done GTN objective=$objective dataset=$dataset lambda=$gtn_lambda seed=$seed"
+  echo "Done GTN objective=$objective dataset=$dataset noise=$noise_ratio lambda=$gtn_lambda seed=$seed"
 }
 
-planned=0
-for dataset in "${dataset_values[@]}"; do
-  read -r -a candidate_values <<<"$(lambda_values "$dataset")"
-  planned=$((planned + ${#candidate_values[@]} * ${#objective_values[@]} * ${#seed_values[@]}))
-done
-echo "GTN clean objective experiment"
+planned=$((${#dataset_values[@]} * ${#objective_values[@]} * ${#noise_ratio_values[@]} * ${#seed_values[@]}))
+echo "GTN objective noise-curve experiment"
 echo "  datasets:        $datasets"
 echo "  objectives:      $objectives"
+echo "  noise ratios:    $noise_ratios"
 echo "  seeds:           $seeds"
 echo "  planned runs:    $planned"
 echo "  model selection: best Recall@20 epoch (paired NDCG@20)"
@@ -167,10 +166,9 @@ echo "  output:          $output_root"
 
 for objective in "${objective_values[@]}"; do
   for dataset in "${dataset_values[@]}"; do
-    read -r -a candidate_values <<<"$(lambda_values "$dataset")"
-    for gtn_lambda in "${candidate_values[@]}"; do
+    for noise_ratio in "${noise_ratio_values[@]}"; do
       for seed in "${seed_values[@]}"; do
-        run_case "$dataset" "$objective" "$seed" "$gtn_lambda"
+        run_case "$dataset" "$objective" "$noise_ratio" "$seed"
       done
     done
   done
@@ -186,9 +184,9 @@ python3 "$script_dir/summarize_reliability_runs.py" \
 python3 "$script_dir/analyze_gtn_clean_objectives.py" \
   --input "$output_root/all_runs.json" \
   --profile "$profile_file" \
-  --output "$output_root/gtn_clean_objectives_summary.json" \
-  --markdown "$output_root/gtn_clean_objectives_summary.md"
+  --output "$output_root/gtn_objective_noise_curve_summary.json" \
+  --markdown "$output_root/gtn_objective_noise_curve_summary.md"
 
-echo "GTN clean experiment completed: $output_root"
-echo "  table: $output_root/gtn_clean_objectives_summary.md"
-echo "  JSON:  $output_root/gtn_clean_objectives_summary.json"
+echo "GTN objective noise curve completed: $output_root"
+echo "  table: $output_root/gtn_objective_noise_curve_summary.md"
+echo "  JSON:  $output_root/gtn_objective_noise_curve_summary.json"
