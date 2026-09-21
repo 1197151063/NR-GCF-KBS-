@@ -48,6 +48,7 @@ run_subset() {
   GPU_ID="$gpu_id" \
   DRY_RUN="$dry_run" \
   SKIP_COMPLETED="$skip_completed" \
+  RUN_FINAL_ANALYSIS=0 \
   REQUIRE_CLEAN_REPO="${REQUIRE_CLEAN_REPO:-1}" \
   NRGCF_OMP_NUM_THREADS="${NRGCF_OMP_NUM_THREADS:-4}" \
     bash "$runner"

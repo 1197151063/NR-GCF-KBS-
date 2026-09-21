@@ -23,8 +23,9 @@ arms="${ARMS:-lightgcn full}"
 gpu_id="${GPU_ID:-0}"
 dry_run="${DRY_RUN:-0}"
 skip_completed="${SKIP_COMPLETED:-1}"
+run_final_analysis="${RUN_FINAL_ANALYSIS:-1}"
 
-for flag in dry_run skip_completed; do
+for flag in dry_run skip_completed run_final_analysis; do
   value="${!flag}"
   if [[ "$value" != "0" && "$value" != "1" ]]; then
     echo "${flag^^} must be 0 or 1." >&2
@@ -234,17 +235,23 @@ fi
 python3 "$script_dir/summarize_reliability_runs.py" \
   --root "$output_root" --output "$output_root/all_runs.json"
 
-python3 "$script_dir/analyze_full_edge_filter_norm.py" \
-  --input "$output_root/all_runs.json" \
-  --profile "$profile_file" \
-  --datasets "${dataset_values[@]}" \
-  --arms "${arm_values[@]}" \
-  --noise-ratios "${ratio_values[@]}" \
-  --seeds "${seed_values[@]}" \
-  --output "$output_root/full_edge_filter_norm_summary.json" \
-  --markdown "$output_root/full_edge_filter_norm_summary.md"
+if [[ "$run_final_analysis" == "1" ]]; then
+  python3 "$script_dir/analyze_full_edge_filter_norm.py" \
+    --input "$output_root/all_runs.json" \
+    --profile "$profile_file" \
+    --datasets "${dataset_values[@]}" \
+    --arms "${arm_values[@]}" \
+    --noise-ratios "${ratio_values[@]}" \
+    --seeds "${seed_values[@]}" \
+    --output "$output_root/full_edge_filter_norm_summary.json" \
+    --markdown "$output_root/full_edge_filter_norm_summary.md"
+else
+  echo "Skipped full-comparison analysis for the requested arm subset."
+fi
 
 echo "Full experiment completed: $output_root"
-echo "  table: $output_root/full_edge_filter_norm_summary.md"
-echo "  JSON:  $output_root/full_edge_filter_norm_summary.json"
+if [[ "$run_final_analysis" == "1" ]]; then
+  echo "  table: $output_root/full_edge_filter_norm_summary.md"
+  echo "  JSON:  $output_root/full_edge_filter_norm_summary.json"
+fi
 echo "  runs:  $output_root/all_runs.json"
